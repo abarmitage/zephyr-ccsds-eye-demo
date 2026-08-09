@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "CCSDS EYE demo"
+
+choice EYE_DEMO_ROLE
+	prompt "Demo role"
+	default EYE_DEMO_ROLE_A
+
+config EYE_DEMO_ROLE_A
+	bool "EYE A"
+
+config EYE_DEMO_ROLE_B
+	bool "EYE B"
+
+endchoice
+
+config EYE_DEMO_CALLSIGN
+	string "Local callsign"
+	default "EYE-1" if EYE_DEMO_ROLE_A
+	default "EYE-2" if EYE_DEMO_ROLE_B
+
+config EYE_DEMO_PEER_CALLSIGN
+	string "Peer callsign"
+	default "EYE-2" if EYE_DEMO_ROLE_A
+	default "EYE-1" if EYE_DEMO_ROLE_B
+
+config EYE_DEMO_LOCAL_ENTITY_ID
+	int "Local CFDP entity ID"
+	default 1 if EYE_DEMO_ROLE_A
+	default 2 if EYE_DEMO_ROLE_B
+	range 1 255
+
+config EYE_DEMO_PEER_ENTITY_ID
+	int "Peer CFDP entity ID"
+	default 2 if EYE_DEMO_ROLE_A
+	default 1 if EYE_DEMO_ROLE_B
+	range 1 255
+
+source "Kconfig.zephyr"
+

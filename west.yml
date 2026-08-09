@@ -1,0 +1,19 @@
+manifest:
+  remotes:
+    - name: zephyrproject
+      url-base: https://github.com/zephyrproject-rtos
+    - name: abarmitage
+      url-base: https://github.com/abarmitage
+
+  projects:
+    - name: zephyr
+      remote: zephyrproject
+      revision: v4.3.0
+      import: true
+    - name: zephyr-ccsds
+      remote: abarmitage
+      revision: main
+      path: modules/lib/ccsds
+
+  self:
+    path: ccsds-eye-demo
