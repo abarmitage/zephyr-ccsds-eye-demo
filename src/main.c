@@ -10,6 +10,7 @@
 #include <lvgl.h>
 
 #include "demo_ui.h"
+#include "demo_service.h"
 
 LOG_MODULE_REGISTER(eye_demo, CONFIG_LOG_DEFAULT_LEVEL);
 
@@ -49,11 +50,24 @@ int main(void)
 	demo_ui_init();
 	(void)lv_timer_handler();
 	(void)display_blanking_off(display);
+	if (demo_service_start() != 0) {
+		LOG_ERR("protocol service failed to start");
+	}
 
 	while (true) {
+		struct demo_ui_event ui_event;
+
 		while (k_msgq_get(&key_events, &key, K_NO_WAIT) == 0) {
 			LOG_INF("input code=%u value=%d", key.code, key.value);
 			demo_ui_handle_key(key.code, key.value);
+			if (key.value != 0 && key.code == INPUT_KEY_MENU) {
+				(void)demo_service_queue_local_send();
+			} else if (key.value != 0 && key.code == INPUT_KEY_PLAY) {
+				(void)demo_service_queue_remote_request();
+			}
+		}
+		while (demo_service_get_ui_event(&ui_event)) {
+			demo_ui_handle_event(&ui_event);
 		}
 
 		demo_ui_tick(k_uptime_get_32());
@@ -63,4 +77,3 @@ int main(void)
 
 	return 0;
 }
-

@@ -15,12 +15,18 @@
 #define TRACK_X 54
 #define TRACK_WIDTH 132
 #define PACKET_WIDTH 10
+#define TRANSFER_ANIMATION_MS 900U
+#define TC_ANIMATION_MS 250U
 
 enum demo_state {
+	DEMO_BOOT,
+	DEMO_PEER_ABSENT_STATE,
 	DEMO_IDLE,
 	DEMO_TX,
+	DEMO_RX,
 	DEMO_REQUEST,
 	DEMO_DUPLEX,
+	DEMO_VERIFYING_STATE,
 	DEMO_COMPLETE,
 	DEMO_FAILED,
 };
@@ -44,8 +50,15 @@ static lv_obj_t *tx_bar;
 static lv_obj_t *rx_bar;
 static lv_obj_t *tx_caption;
 static lv_obj_t *rx_caption;
+static lv_color_t local_accent;
+static lv_color_t peer_accent;
 static enum demo_state state;
 static uint32_t state_started;
+static bool cfdp_tx_active;
+static bool cfdp_rx_active;
+static bool tc_incoming;
+static bool completion_pending;
+static enum demo_transfer_direction completion_direction;
 
 static lv_obj_t *solid_obj(lv_obj_t *parent, int x, int y, int width,
 			   int height, lv_color_t color)
@@ -97,14 +110,29 @@ static void set_state(enum demo_state next, uint32_t now_ms)
 	state_started = now_ms;
 
 	switch (state) {
+	case DEMO_BOOT:
+		set_activity(false, false);
+		lv_label_set_text(status_label, "WIFI CONNECTING");
+		break;
+	case DEMO_PEER_ABSENT_STATE:
+		set_activity(false, false);
+		lv_label_set_text(status_label, "PEER UNAVAILABLE");
+		break;
 	case DEMO_IDLE:
 		set_activity(false, false);
-		lv_label_set_text(status_label, "READY  /  PEER --");
+		lv_label_set_text(status_label, "READY  /  PEER OK");
 		break;
 	case DEMO_TX:
 		set_activity(true, false);
-		lv_label_set_text(status_label, "CAPTURED  /  CFDP TX");
-		lv_obj_set_style_bg_color(tx_packet, color_cyan, 0);
+		lv_label_set_text(status_label, "CFDP TX ACTIVE");
+		lv_obj_set_style_bg_color(tx_packet, local_accent, 0);
+		lv_obj_set_style_text_color(tx_caption, local_accent, 0);
+		break;
+	case DEMO_RX:
+		set_activity(false, true);
+		lv_label_set_text(status_label, "CFDP RX ACTIVE");
+		lv_obj_set_style_bg_color(rx_packet, peer_accent, 0);
+		lv_obj_set_style_text_color(rx_caption, peer_accent, 0);
 		break;
 	case DEMO_REQUEST:
 		set_activity(true, false);
@@ -114,7 +142,14 @@ static void set_state(enum demo_state next, uint32_t now_ms)
 	case DEMO_DUPLEX:
 		set_activity(true, true);
 		lv_label_set_text(status_label, "CFDP DUPLEX");
-		lv_obj_set_style_bg_color(tx_packet, color_cyan, 0);
+		lv_obj_set_style_bg_color(tx_packet, local_accent, 0);
+		lv_obj_set_style_bg_color(rx_packet, peer_accent, 0);
+		lv_obj_set_style_text_color(tx_caption, local_accent, 0);
+		lv_obj_set_style_text_color(rx_caption, peer_accent, 0);
+		break;
+	case DEMO_VERIFYING_STATE:
+		set_activity(false, false);
+		lv_label_set_text(status_label, "VERIFYING TEST OBJECT");
 		break;
 	case DEMO_COMPLETE:
 		set_activity(false, false);
@@ -144,7 +179,27 @@ static void update_packet(lv_obj_t *packet, lv_obj_t *bar, uint32_t progress,
 	}
 
 	lv_obj_set_x(packet, x);
-	lv_bar_set_value(bar, (int32_t)progress, LV_ANIM_OFF);
+	ARG_UNUSED(bar);
+}
+
+static uint32_t transfer_progress(uint32_t elapsed)
+{
+	return MIN(elapsed, TRANSFER_ANIMATION_MS) * 100U / TRANSFER_ANIMATION_MS;
+}
+
+static uint32_t tc_progress(uint32_t elapsed)
+{
+	return MIN(elapsed, TC_ANIMATION_MS) * 100U / TC_ANIMATION_MS;
+}
+
+static void show_completion(enum demo_transfer_direction direction, uint32_t now_ms)
+{
+	set_state(DEMO_COMPLETE, now_ms);
+	if (direction == DEMO_TRANSFER_TX) {
+		lv_label_set_text(status_label, "PEER VERIFIED / TX DONE");
+	} else {
+		lv_label_set_text(status_label, "CHECKSUM OK / RX DONE");
+	}
 }
 
 void demo_ui_init(void)
@@ -152,6 +207,9 @@ void demo_ui_init(void)
 	lv_obj_t *screen = lv_screen_active();
 	lv_obj_t *label;
 	lv_obj_t *divider;
+
+	local_accent = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? color_cyan : color_amber;
+	peer_accent = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? color_amber : color_cyan;
 
 	lv_obj_set_style_bg_color(screen, color_bg, 0);
 	lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
@@ -161,24 +219,24 @@ void demo_ui_init(void)
 
 	label = lv_label_create(screen);
 	lv_label_set_text(label, CONFIG_EYE_DEMO_CALLSIGN);
+	lv_obj_set_style_text_color(label, local_accent, 0);
 	lv_obj_set_pos(label, 8, 8);
 
 	label = lv_label_create(screen);
 	lv_label_set_text(label, "CFDP");
-	lv_obj_set_style_text_color(label, color_cyan, 0);
+	lv_obj_set_style_text_color(label, color_muted, 0);
 	lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 8);
 
 	label = lv_label_create(screen);
 	lv_label_set_text(label, CONFIG_EYE_DEMO_PEER_CALLSIGN);
+	lv_obj_set_style_text_color(label, peer_accent, 0);
 	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -8, 8);
 
 	divider = solid_obj(screen, 0, 30, SCREEN_WIDTH, 1, color_panel);
 	ARG_UNUSED(divider);
 
-	create_spacecraft(screen, 10, 48,
-			  IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? color_cyan : color_amber);
-	create_spacecraft(screen, 187, 48,
-			  IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? color_amber : color_cyan);
+	create_spacecraft(screen, 10, 48, local_accent);
+	create_spacecraft(screen, 187, 48, peer_accent);
 
 	label = lv_label_create(screen);
 	lv_label_set_text_fmt(label, "ID %d", CONFIG_EYE_DEMO_LOCAL_ENTITY_ID);
@@ -207,7 +265,7 @@ void demo_ui_init(void)
 	lv_obj_set_pos(rx_caption, 30, 69);
 
 	status_label = lv_label_create(screen);
-	lv_label_set_text(status_label, "READY  /  PEER --");
+	lv_label_set_text_fmt(status_label, "%s  /  WIFI --", CONFIG_EYE_DEMO_LOCAL_IPV4);
 	lv_obj_set_width(status_label, 224);
 	lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_set_pos(status_label, 8, 102);
@@ -216,6 +274,7 @@ void demo_ui_init(void)
 	lv_obj_set_pos(tx_bar, 35, 128);
 	lv_obj_set_size(tx_bar, 170, 7);
 	lv_bar_set_range(tx_bar, 0, 100);
+	lv_bar_set_value(tx_bar, 100, LV_ANIM_OFF);
 	lv_obj_set_style_bg_color(tx_bar, color_panel, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(tx_bar, color_cyan, LV_PART_INDICATOR);
 	lv_obj_set_style_radius(tx_bar, 1, LV_PART_MAIN);
@@ -225,6 +284,7 @@ void demo_ui_init(void)
 	lv_obj_set_pos(rx_bar, 35, 141);
 	lv_obj_set_size(rx_bar, 170, 7);
 	lv_bar_set_range(rx_bar, 0, 100);
+	lv_bar_set_value(rx_bar, 100, LV_ANIM_OFF);
 	lv_obj_set_style_bg_color(rx_bar, color_panel, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(rx_bar, color_cyan, LV_PART_INDICATOR);
 	lv_obj_set_style_radius(rx_bar, 1, LV_PART_MAIN);
@@ -240,19 +300,20 @@ void demo_ui_init(void)
 	(void)solid_obj(screen, 0, 190, SCREEN_WIDTH, 1, color_panel);
 
 	label = lv_label_create(screen);
-	lv_label_set_text(label, "PLAY  SEND");
+	lv_label_set_text(label, "A  SEND");
 	lv_obj_set_pos(label, 8, 202);
 
 	label = lv_label_create(screen);
-	lv_label_set_text(label, "MENU  REQUEST");
+	lv_label_set_text(label, "B  REQUEST");
 	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -8, 202);
 
 	label = lv_label_create(screen);
-	lv_label_set_text(label, "UP  DUPLEX     DOWN  RESET");
+	lv_label_set_text_fmt(label, "%s  ID %d", CONFIG_EYE_DEMO_LOCAL_IPV4,
+			      CONFIG_EYE_DEMO_LOCAL_ENTITY_ID);
 	lv_obj_set_style_text_color(label, color_muted, 0);
 	lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -7);
 
-	set_state(DEMO_IDLE, k_uptime_get_32());
+	set_state(DEMO_BOOT, k_uptime_get_32());
 }
 
 void demo_ui_handle_key(uint16_t code, int32_t value)
@@ -261,27 +322,104 @@ void demo_ui_handle_key(uint16_t code, int32_t value)
 
 	lv_label_set_text_fmt(input_label, "INPUT: code %u  %s", code, edge);
 
-	if (value == 0) {
-		return;
-	}
+	ARG_UNUSED(code);
+}
 
-	switch (code) {
-	case INPUT_KEY_PLAY:
-		set_state(DEMO_TX, k_uptime_get_32());
+void demo_ui_handle_event(const struct demo_ui_event *event)
+{
+	uint32_t now = k_uptime_get_32();
+
+	switch (event->type) {
+	case DEMO_UI_NETWORK_CONNECTING:
+		set_state(DEMO_BOOT, now);
 		break;
-	case INPUT_KEY_MENU:
-		set_state(DEMO_REQUEST, k_uptime_get_32());
+	case DEMO_UI_NETWORK_READY:
+	case DEMO_UI_PEER_ABSENT:
+		set_state(DEMO_PEER_ABSENT_STATE, now);
 		break;
-	case INPUT_KEY_UP:
-		set_state(DEMO_DUPLEX, k_uptime_get_32());
+	case DEMO_UI_NETWORK_FAILED:
+		set_state(DEMO_FAILED, now);
+		lv_label_set_text(status_label, "WIFI / IP FAILED");
 		break;
-	case INPUT_KEY_DOWN:
-		set_state(DEMO_IDLE, k_uptime_get_32());
+	case DEMO_UI_PEER_READY:
+		set_state(DEMO_IDLE, now);
 		break;
-	case INPUT_KEY_0:
-		set_state(DEMO_FAILED, k_uptime_get_32());
+	case DEMO_UI_PEER_INVALID:
+		set_state(DEMO_FAILED, now);
+		lv_label_set_text_fmt(status_label, "PEER CONFIG ERROR %d", event->detail);
 		break;
-	default:
+	case DEMO_UI_TC_TX:
+		tc_incoming = false;
+		lv_label_set_text(tx_caption, "TC TX");
+		set_state(DEMO_REQUEST, now);
+		break;
+	case DEMO_UI_TC_RX:
+		tc_incoming = true;
+		set_state(DEMO_REQUEST, now);
+		lv_label_set_text(tx_caption, "TC RX");
+		lv_label_set_text(status_label, "TC REQUEST RECEIVED");
+		break;
+	case DEMO_UI_COMMAND_RESULT:
+		if (event->detail == DEMO_COMMAND_ACCEPTED) {
+			lv_label_set_text(status_label, "TC ACCEPTED / WAIT CFDP");
+		} else if (event->detail == DEMO_COMMAND_BUSY) {
+			lv_label_set_text(status_label, "TC PEER BUSY");
+		} else if (event->detail == DEMO_COMMAND_DUPLICATE) {
+			lv_label_set_text(status_label, "TC DUPLICATE");
+		} else if (event->detail == DEMO_COMMAND_INVALID) {
+			lv_label_set_text(status_label, "TC INVALID");
+		} else {
+			lv_label_set_text(status_label, "TC TIMED OUT");
+		}
+		break;
+	case DEMO_UI_CFDP_TX:
+		completion_pending = false;
+		cfdp_tx_active = true;
+		lv_label_set_text(tx_caption, "TO");
+		set_state(cfdp_rx_active ? DEMO_DUPLEX : DEMO_TX, now);
+		break;
+	case DEMO_UI_CFDP_RX:
+		completion_pending = false;
+		cfdp_rx_active = true;
+		lv_label_set_text(rx_caption, "FROM");
+		set_state(cfdp_tx_active ? DEMO_DUPLEX : DEMO_RX, now);
+		break;
+	case DEMO_UI_VERIFYING:
+		if (cfdp_rx_active) {
+			lv_label_set_text(status_label, "VERIFYING RX OBJECT");
+		} else {
+			set_state(DEMO_VERIFYING_STATE, now);
+		}
+		break;
+	case DEMO_UI_COMPLETE:
+		if (event->detail == DEMO_TRANSFER_TX) {
+			cfdp_tx_active = false;
+		} else {
+			cfdp_rx_active = false;
+		}
+		if (cfdp_tx_active || cfdp_rx_active) {
+			set_state(cfdp_tx_active ? DEMO_TX : DEMO_RX, now);
+		} else if (now - state_started < TRANSFER_ANIMATION_MS) {
+			completion_pending = true;
+			completion_direction = event->detail;
+			lv_label_set_text(status_label,
+					event->detail == DEMO_TRANSFER_TX ?
+					"TX ACKNOWLEDGED" : "RX VERIFIED");
+		} else {
+			show_completion(event->detail, now);
+		}
+		break;
+	case DEMO_UI_FAILED:
+		completion_pending = false;
+		if (event->detail == DEMO_TRANSFER_TX) {
+			cfdp_tx_active = false;
+		} else if (event->detail == DEMO_TRANSFER_RX) {
+			cfdp_rx_active = false;
+		} else {
+			cfdp_tx_active = false;
+			cfdp_rx_active = false;
+		}
+		set_state(DEMO_FAILED, now);
 		break;
 	}
 }
@@ -291,44 +429,36 @@ void demo_ui_tick(uint32_t now_ms)
 	const uint32_t elapsed = now_ms - state_started;
 	uint32_t progress;
 
+	if (completion_pending && elapsed >= TRANSFER_ANIMATION_MS) {
+		completion_pending = false;
+		show_completion(completion_direction, now_ms);
+		return;
+	}
+
 	switch (state) {
 	case DEMO_TX:
-		progress = MIN(elapsed / 30U, 100U);
+		progress = transfer_progress(elapsed);
 		update_packet(tx_packet, tx_bar, progress, false);
-		if (progress == 100U) {
-			set_state(DEMO_COMPLETE, now_ms);
-		}
 		break;
 	case DEMO_REQUEST:
-		if (elapsed < 700U) {
-			progress = MIN(elapsed / 7U, 100U);
-			update_packet(tx_packet, tx_bar, progress, false);
-		} else if (elapsed < 1100U) {
-			set_activity(false, false);
-			lv_label_set_text(status_label, "PEER CAPTURING");
-		} else {
-			set_activity(false, true);
-			lv_label_set_text(status_label, "CFDP RETURN");
-			progress = MIN((elapsed - 1100U) / 30U, 100U);
-			update_packet(rx_packet, rx_bar, progress, true);
-			if (progress == 100U) {
-				set_state(DEMO_COMPLETE, now_ms);
-			}
-		}
+		progress = tc_progress(elapsed);
+		update_packet(tx_packet, tx_bar, progress, tc_incoming);
+		break;
+	case DEMO_RX:
+		progress = transfer_progress(elapsed);
+		update_packet(rx_packet, rx_bar, progress, true);
 		break;
 	case DEMO_DUPLEX:
-		progress = MIN(elapsed / 40U, 100U);
+		progress = transfer_progress(elapsed);
 		update_packet(tx_packet, tx_bar, progress, false);
-		update_packet(rx_packet, rx_bar, MIN((elapsed * 4U) / 170U, 100U),
-			      true);
-		if (progress == 100U) {
-			set_state(DEMO_COMPLETE, now_ms);
-		}
+		update_packet(rx_packet, rx_bar, progress, true);
 		break;
 	case DEMO_COMPLETE:
 	case DEMO_FAILED:
 	case DEMO_IDLE:
+	case DEMO_BOOT:
+	case DEMO_PEER_ABSENT_STATE:
+	case DEMO_VERIFYING_STATE:
 		break;
 	}
 }
-

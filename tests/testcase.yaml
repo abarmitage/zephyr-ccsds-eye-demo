@@ -1,0 +1,7 @@
+tests:
+  eye_demo.protocol:
+    platform_allow:
+      - native_sim
+    tags:
+      - eye_demo
+      - ccsds

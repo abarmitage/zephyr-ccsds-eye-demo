@@ -2,11 +2,10 @@
 
 cmake_minimum_required(VERSION 3.20.0)
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(zephyr_ccsds_eye_demo)
+project(eye_demo_protocol_tests)
 
 target_sources(app PRIVATE
-    src/main.c
-    src/demo_ui.c
-    src/demo_protocol.c
-    src/demo_service.c
+    src/test_demo_protocol.c
+    ../src/demo_protocol.c
 )
+target_include_directories(app PRIVATE ../src)

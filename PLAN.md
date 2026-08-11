@@ -2,7 +2,9 @@
 
 ## Status
 
-Proposed. Implementation has not started.
+Milestone 1's application scaffold and scripted UI are implemented. Remaining
+milestones are proposed until their acceptance checks are completed on both
+boards.
 
 ## Goal
 
@@ -56,19 +58,24 @@ Keep one source tree and two non-secret role configurations:
 | CFDP peer entity | 2 | 1 |
 | Local UDP endpoint | role A address/port | role B address/port |
 | Peer UDP endpoint | role B address/port | role A address/port |
-| UI placement | left | right |
+| UI perspective | local left | local left |
 
-Wi-Fi credentials and site-specific addresses must be supplied through
-git-ignored local configuration. Both screens must display their callsign,
-entity ID, acquired IP address, and peer state so configuration errors are
-visible without a debugger.
+Wi-Fi credentials, static IPv4 addresses, netmask, gateway, and UDP ports must
+be compiled from git-ignored per-board site configuration. Addresses must be
+known unused and excluded or reserved from the LAN's DHCP pool; the demo does
+not run a DHCP client or a peer-discovery protocol. Both screens must display
+their callsign, entity ID, configured local address, and peer state so
+configuration errors are visible without a debugger.
 
 ## UI Baseline
 
 Keep the presentation deliberately small:
 
 - main region: last captured or last verified received image;
-- top strip: two small spacecraft icons, callsigns, and persistent `CFDP`;
+- top strip: local spacecraft on the left, remote spacecraft on the right,
+  their callsigns, stable EYE-1 cyan/EYE-2 orange identity colors, and
+  persistent `CFDP`; position conveys local/peer perspective without literal
+  `ME` or `PEER` labels;
 - transfer activity: animated packet blocks moving in the real direction;
 - bottom strip: physical-button action labels and one or two thin progress
   indicators;
@@ -108,30 +115,62 @@ camera or CFDP data transfer.
   legible on the physical display with no overlaps.
 - UI interaction remains responsive while both synthetic progress lanes run.
 
-## Milestone 2: Two-Board Control And Configuration Slice
+## Milestone 2: Symmetric Two-Board CFDP And Control Slice
 
-Establish real peer communication before adding camera memory pressure.
+Establish real peer communication and both user actions before adding camera
+memory pressure. EYE A and EYE B are equivalent peers; their role
+configurations provide identities and reciprocal endpoints, not different
+behavior.
+
+Both triggers converge on one queued operation that sends an object to a
+destination CFDP entity. Button A queues it locally. A valid
+`CAPTURE_AND_RETURN` TC from button B queues the same operation on the peer,
+with request metadata used only for validation, acknowledgement, destination
+selection, and UI context. Until camera integration, a fixed versioned test
+object is the operation's source.
 
 ### Work
 
-- Connect both roles to the same Wi-Fi network with reciprocal UDP endpoints.
-- Add a bounded peer-presence/status exchange and drive the UI peer state.
+- Connect both roles to the same Wi-Fi network using the compiled static IPv4
+  settings and reciprocal UDP endpoints. Do not start DHCP or discovery.
+- Add a bounded unicast peer-presence/status exchange and drive the UI peer
+  state.
+- Configure the packet profile, APID router, UDP bearer, and acknowledged CFDP
+  service identically on both peers.
+- Add bounded in-memory source and destination adapters and a fixed versioned
+  test object suitable for byte-for-byte verification.
+- Implement one worker-owned `send object to entity` operation. Carry origin,
+  request ID, and destination as data rather than branching on EYE role.
+- Make button A queue that operation directly for the configured peer entity.
 - Register a dedicated demo command APID.
 - Define a versioned `CAPTURE_AND_RETURN` TC payload containing a request ID
   and requesting CFDP entity ID.
-- Send the TC from button B and queue it safely on the peer.
+- Make button B send that TC. After validation and duplicate suppression, make
+  the receiving peer queue the same send operation used by its button A.
 - Return a small command acceptance/status Space Packet so the requester can
   distinguish accepted, busy, invalid, and timed-out commands.
-- Run all router callbacks without camera, LVGL, or synchronous CFDP reentry.
+- Drive the existing UI with real peer, TC, CFDP direction, completion, and
+  failure events. Coarse transfer indication is acceptable until Milestone 3
+  supplies byte progress.
+- Copy work out of UDP, router, input, and CFDP callbacks into bounded queues.
+  Do not call LVGL, block, or synchronously reenter CFDP from those callbacks.
 
 ### Acceptance
 
 - Swapping or duplicating role configuration is visibly diagnosed.
-- Button B produces a visible TC animation, peer acceptance, and completion
-  on both boards.
+- Button A on either board transfers the test object by acknowledged CFDP; the
+  receiver verifies its version, size, and bytes.
+- Button B on either board produces a visible TC animation and peer
+  acceptance; the peer then uses the same send operation to return the test
+  object by CFDP, and the requester verifies it.
+- Both displays show the correct TC and CFDP directions and return to a usable
+  state after completion or failure.
 - An absent peer reaches a bounded timeout and returns the UI to a usable
   state.
-- Repeated commands do not leak request state or trigger duplicate work.
+- Repeated request IDs do not leak state or trigger duplicate work, and busy
+  behavior is bounded and visible.
+- No runtime behavior depends on whether the build is role A or role B beyond
+  configured identity and endpoint values.
 
 ## Milestone 3: Generic CFDP Progress Callback
 
@@ -187,9 +226,11 @@ own queue.
 - Define buffer ownership across camera capture, LVGL display, CFDP sender
   retention, and retransmission.
 - Display the captured still through the real UI.
-- Exercise repeated capture from button A without networking transfer.
-- On accepted button-B commands, capture on the peer and report capture status
-  without yet returning the image.
+- Add camera capture as the acquisition phase of the shared operation proven
+  in Milestone 2. Validate that phase locally before replacing the CFDP test
+  object with the captured image.
+- Exercise the same capture phase from local button-A requests and accepted
+  button-B TCs; request origin must not select a different capture path.
 
 ### Acceptance
 
@@ -202,8 +243,8 @@ own queue.
 
 ### Work
 
-- Implement bounded PSRAM-backed CFDP source and destination filestore
-  adapters in the demo.
+- Extend the Milestone 2 in-memory CFDP adapters with bounded PSRAM-backed
+  image storage and explicit ownership.
 - Transfer a known test image before connecting live camera output.
 - Select the largest CFDP segment that keeps the encoded Space Packet inside
   one non-fragmented UDP datagram.

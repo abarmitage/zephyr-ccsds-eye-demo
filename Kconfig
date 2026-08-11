@@ -36,5 +36,58 @@ config EYE_DEMO_PEER_ENTITY_ID
 	default 1 if EYE_DEMO_ROLE_B
 	range 1 255
 
-source "Kconfig.zephyr"
+config EYE_DEMO_WIFI_SSID
+	string "Wi-Fi SSID"
+	default ""
 
+config EYE_DEMO_WIFI_PASSWORD
+	string "Wi-Fi WPA2 password"
+	default ""
+
+config EYE_DEMO_LOCAL_IPV4
+	string "Local static IPv4 address"
+	default "192.0.2.1"
+
+config EYE_DEMO_PEER_IPV4
+	string "Peer static IPv4 address"
+	default "192.0.2.2"
+
+config EYE_DEMO_NETMASK
+	string "IPv4 netmask"
+	default "255.255.255.0"
+
+config EYE_DEMO_GATEWAY
+	string "IPv4 gateway"
+	default "192.0.2.254"
+
+config EYE_DEMO_LOCAL_UDP_PORT
+	int "Local UDP port"
+	default 46001
+	range 1024 65535
+
+config EYE_DEMO_PEER_UDP_PORT
+	int "Peer UDP port"
+	default 46002
+	range 1024 65535
+
+config EYE_DEMO_CFDP_APID
+	hex "CFDP Space Packet APID"
+	default 0x350
+	range 1 0x7ff
+
+config EYE_DEMO_COMMAND_APID
+	hex "CAPTURE_AND_RETURN TC APID"
+	default 0x351
+	range 1 0x7ff
+
+config EYE_DEMO_COMMAND_STATUS_APID
+	hex "Command status Space Packet APID"
+	default 0x352
+	range 1 0x7ff
+
+config EYE_DEMO_PEER_STATUS_APID
+	hex "Peer status Space Packet APID"
+	default 0x353
+	range 1 0x7ff
+
+source "Kconfig.zephyr"
