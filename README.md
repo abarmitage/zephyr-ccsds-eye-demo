@@ -85,7 +85,11 @@ of that command starts the CFDP transfer in the opposite direction.
 
 The test object is 1,536 bytes and is divided into several CFDP File Data PDUs.
 The receiving board checks its version, declared size, contents, and checksum
-before reporting completion. A successful exchange ends with `TX DONE` on the
+before reporting completion. The thin TX and RX bars show real CFDP byte
+progress copied from the generic module callback and refreshed at a bounded
+cadence. Duplicate or retransmitted data does not inflate the RX bar, recovery
+activity is labelled separately, and 100 percent remains distinct from final
+checksum/Finished completion. A successful exchange ends with `TX DONE` on the
 sender and `RX DONE` on the receiver. Errors and unavailable peers are reported
 on the display.
 

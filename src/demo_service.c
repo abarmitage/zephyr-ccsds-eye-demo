@@ -39,6 +39,7 @@ LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 #define COMMAND_TIMEOUT_MS 5000u
 #define REQUEST_RETENTION_MS 60000u
 #define SERVICE_POLL_MS 25u
+#define PROGRESS_UI_PERIOD_MS 100u
 #define TEST_SOURCE_NAME "eye-test-v1.bin"
 #define TEST_DEST_NAME "eye-received-v1.bin"
 
@@ -102,6 +103,14 @@ struct send_operation {
 	bool has_request_id;
 };
 
+struct progress_update {
+	bool pending;
+	bool recovery_activity;
+	uint32_t bytes_transferred;
+	uint32_t file_size;
+	uint64_t next_ui_ms;
+};
+
 struct memory_object {
 	uint8_t data[DEMO_TEST_OBJECT_SIZE];
 	uint32_t size;
@@ -142,6 +151,8 @@ static uint32_t pending_request_id;
 static uint64_t pending_request_deadline_ms;
 static bool receiver_wait_logged;
 static uint32_t receiver_retry_logged;
+static struct progress_update tx_progress;
+static struct progress_update rx_progress;
 
 static void ui_event(enum demo_ui_event_type type, uint32_t request_id, int32_t detail)
 {
@@ -149,6 +160,20 @@ static void ui_event(enum demo_ui_event_type type, uint32_t request_id, int32_t 
 		.type = type,
 		.request_id = request_id,
 		.detail = detail,
+	};
+
+	(void)k_msgq_put(&ui_queue, &event, K_NO_WAIT);
+}
+
+static void ui_progress_event(enum demo_transfer_direction direction,
+			      const struct progress_update *progress)
+{
+	const struct demo_ui_event event = {
+		.type = DEMO_UI_CFDP_PROGRESS,
+		.detail = direction,
+		.bytes_transferred = progress->bytes_transferred,
+		.file_size = progress->file_size,
+		.recovery_activity = progress->recovery_activity,
 	};
 
 	(void)k_msgq_put(&ui_queue, &event, K_NO_WAIT);
@@ -586,18 +611,58 @@ static void process_router_messages(uint64_t now)
 	}
 }
 
-static void process_cfdp_events(void)
+static void flush_progress(struct progress_update *progress,
+			   enum demo_transfer_direction direction, uint64_t now,
+			   bool force)
+{
+	if (!progress->pending || (!force && now < progress->next_ui_ms)) {
+		return;
+	}
+
+	ui_progress_event(direction, progress);
+	progress->pending = false;
+	progress->next_ui_ms = now + PROGRESS_UI_PERIOD_MS;
+}
+
+static void process_cfdp_events(uint64_t now)
 {
 	struct cfdp_event_message message;
 
 	while (k_msgq_get(&cfdp_event_queue, &message, K_NO_WAIT) == 0) {
+		struct progress_update *progress =
+			message.event.direction == CCSDS_CFDP_DIRECTION_SENDER ?
+			&tx_progress : &rx_progress;
+		enum demo_transfer_direction direction =
+			message.event.direction == CCSDS_CFDP_DIRECTION_SENDER ?
+			DEMO_TRANSFER_TX : DEMO_TRANSFER_RX;
+
+		if (message.event.type == CCSDS_CFDP_EVENT_TRANSACTION_STARTED ||
+		    message.event.type == CCSDS_CFDP_EVENT_FILE_SEGMENT_SENT ||
+		    message.event.type == CCSDS_CFDP_EVENT_FILE_SEGMENT_RECV ||
+		    message.event.type == CCSDS_CFDP_EVENT_NAK_SENT ||
+		    message.event.type == CCSDS_CFDP_EVENT_NAK_RECV ||
+		    message.event.type == CCSDS_CFDP_EVENT_RETRANSMIT) {
+			progress->bytes_transferred = message.event.bytes_transferred;
+			progress->file_size = message.event.file_size;
+			progress->recovery_activity =
+				message.event.phase == CCSDS_CFDP_PHASE_RECOVERY;
+			progress->pending = true;
+			flush_progress(progress, direction, now, false);
+		}
+
 		if (message.event.type == CCSDS_CFDP_EVENT_COMPLETE ||
 		    message.event.type == CCSDS_CFDP_EVENT_FAILED) {
-			bool sender = message.event.transaction_id.source_entity_id ==
-				      CONFIG_EYE_DEMO_LOCAL_ENTITY_ID;
+			bool sender =
+				message.event.direction == CCSDS_CFDP_DIRECTION_SENDER;
 			bool success = message.event.type == CCSDS_CFDP_EVENT_COMPLETE &&
 				       message.event.status == CCSDS_CFDP_STATUS_OK;
 			uint32_t request_id = sender ? active_operation.request_id : 0u;
+
+			progress->bytes_transferred = message.event.bytes_transferred;
+			progress->file_size = message.event.file_size;
+			progress->recovery_activity = false;
+			progress->pending = true;
+			flush_progress(progress, direction, now, true);
 
 			if (!sender) {
 				success = success && receive_object.verified;
@@ -622,6 +687,9 @@ static void process_cfdp_events(void)
 			}
 		}
 	}
+
+	flush_progress(&tx_progress, DEMO_TRANSFER_TX, now, false);
+	flush_progress(&rx_progress, DEMO_TRANSFER_RX, now, false);
 }
 
 static void process_actions(uint64_t now)
@@ -814,7 +882,7 @@ static void worker(void *p1, void *p2, void *p3)
 			process_router_messages(now);
 		}
 		process_router_messages(now);
-		process_cfdp_events();
+		process_cfdp_events(now);
 		if (protocol_ready) {
 			process_actions(now);
 			ccsds_cfdp_service_poll(&cfdp_service, now);

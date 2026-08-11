@@ -274,7 +274,7 @@ void demo_ui_init(void)
 	lv_obj_set_pos(tx_bar, 35, 128);
 	lv_obj_set_size(tx_bar, 170, 7);
 	lv_bar_set_range(tx_bar, 0, 100);
-	lv_bar_set_value(tx_bar, 100, LV_ANIM_OFF);
+	lv_bar_set_value(tx_bar, 0, LV_ANIM_OFF);
 	lv_obj_set_style_bg_color(tx_bar, color_panel, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(tx_bar, color_cyan, LV_PART_INDICATOR);
 	lv_obj_set_style_radius(tx_bar, 1, LV_PART_MAIN);
@@ -284,7 +284,7 @@ void demo_ui_init(void)
 	lv_obj_set_pos(rx_bar, 35, 141);
 	lv_obj_set_size(rx_bar, 170, 7);
 	lv_bar_set_range(rx_bar, 0, 100);
-	lv_bar_set_value(rx_bar, 100, LV_ANIM_OFF);
+	lv_bar_set_value(rx_bar, 0, LV_ANIM_OFF);
 	lv_obj_set_style_bg_color(rx_bar, color_panel, LV_PART_MAIN);
 	lv_obj_set_style_bg_color(rx_bar, color_cyan, LV_PART_INDICATOR);
 	lv_obj_set_style_radius(rx_bar, 1, LV_PART_MAIN);
@@ -375,15 +375,37 @@ void demo_ui_handle_event(const struct demo_ui_event *event)
 	case DEMO_UI_CFDP_TX:
 		completion_pending = false;
 		cfdp_tx_active = true;
+		lv_bar_set_value(tx_bar, 0, LV_ANIM_OFF);
 		lv_label_set_text(tx_caption, "TO");
 		set_state(cfdp_rx_active ? DEMO_DUPLEX : DEMO_TX, now);
 		break;
 	case DEMO_UI_CFDP_RX:
 		completion_pending = false;
 		cfdp_rx_active = true;
+		lv_bar_set_value(rx_bar, 0, LV_ANIM_OFF);
 		lv_label_set_text(rx_caption, "FROM");
 		set_state(cfdp_tx_active ? DEMO_DUPLEX : DEMO_RX, now);
 		break;
+	case DEMO_UI_CFDP_PROGRESS: {
+		uint32_t percent = 0u;
+
+		if (event->file_size > 0u) {
+			percent = (uint32_t)(((uint64_t)MIN(event->bytes_transferred,
+							 event->file_size) * 100u) /
+					      event->file_size);
+		}
+		if (event->detail == DEMO_TRANSFER_TX) {
+			lv_bar_set_value(tx_bar, (int32_t)percent, LV_ANIM_OFF);
+		} else {
+			lv_bar_set_value(rx_bar, (int32_t)percent, LV_ANIM_OFF);
+		}
+		if (event->recovery_activity) {
+			lv_label_set_text(status_label,
+				event->detail == DEMO_TRANSFER_TX ?
+				"CFDP TX RECOVERY" : "CFDP RX RECOVERY");
+		}
+		break;
+	}
 	case DEMO_UI_VERIFYING:
 		if (cfdp_rx_active) {
 			lv_label_set_text(status_label, "VERIFYING RX OBJECT");
