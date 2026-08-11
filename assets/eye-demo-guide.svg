@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="430" viewBox="0 0 760 430" role="img" aria-labelledby="title desc">
+  <title id="title">ESP32-S3-EYE demo controls and screen</title>
+  <desc id="desc">Buttons A and B are on the left of the display. The local spacecraft appears on the left of the screen and the peer on the right.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <path d="M0,0 L9,3.5 L0,7 Z" fill="#cbd5e1"/>
+    </marker>
+  </defs>
+
+  <rect width="760" height="430" rx="18" fill="#f4f7fa"/>
+  <text x="380" y="34" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="700" fill="#18232e">View from EYE-1</text>
+
+  <!-- Board and its two left-side controls. -->
+  <rect x="142" y="54" width="500" height="322" rx="24" fill="#26333d" stroke="#111a21" stroke-width="4"/>
+  <rect x="111" y="116" width="39" height="55" rx="10" fill="#d9e1e7" stroke="#26333d" stroke-width="4"/>
+  <rect x="111" y="250" width="39" height="55" rx="10" fill="#d9e1e7" stroke="#26333d" stroke-width="4"/>
+  <circle cx="130" cy="143" r="11" fill="#647583"/>
+  <circle cx="130" cy="277" r="11" fill="#647583"/>
+
+  <text x="91" y="137" text-anchor="end" font-family="sans-serif" font-size="18" font-weight="700" fill="#18232e">A</text>
+  <text x="91" y="158" text-anchor="end" font-family="sans-serif" font-size="14" fill="#52616d">SEND</text>
+  <line x1="98" y1="143" x2="113" y2="143" stroke="#52616d" stroke-width="2"/>
+  <text x="91" y="271" text-anchor="end" font-family="sans-serif" font-size="18" font-weight="700" fill="#18232e">B</text>
+  <text x="91" y="292" text-anchor="end" font-family="sans-serif" font-size="14" fill="#52616d">REQUEST</text>
+  <line x1="98" y1="277" x2="113" y2="277" stroke="#52616d" stroke-width="2"/>
+
+  <!-- Display. -->
+  <rect x="169" y="77" width="446" height="276" rx="10" fill="#05090e" stroke="#71808c" stroke-width="3"/>
+  <text x="188" y="105" font-family="monospace" font-size="17" font-weight="700" fill="#26c6da">EYE-1</text>
+  <text x="392" y="105" text-anchor="middle" font-family="monospace" font-size="15" fill="#6f808f">CFDP</text>
+  <text x="596" y="105" text-anchor="end" font-family="monospace" font-size="17" font-weight="700" fill="#f5a623">EYE-2</text>
+  <line x1="169" y1="116" x2="615" y2="116" stroke="#26333d"/>
+
+  <!-- Stylised spacecraft. -->
+  <rect x="198" y="148" width="26" height="24" fill="#e1e9f0"/>
+  <rect x="181" y="154" width="14" height="12" fill="#26c6da"/>
+  <rect x="227" y="154" width="14" height="12" fill="#26c6da"/>
+  <circle cx="211" cy="160" r="4" fill="#05090e"/>
+  <rect x="560" y="148" width="26" height="24" fill="#e1e9f0"/>
+  <rect x="543" y="154" width="14" height="12" fill="#f5a623"/>
+  <rect x="589" y="154" width="14" height="12" fill="#f5a623"/>
+  <circle cx="573" cy="160" r="4" fill="#05090e"/>
+  <text x="211" y="194" text-anchor="middle" font-family="monospace" font-size="13" fill="#6f808f">ID 1</text>
+  <text x="573" y="194" text-anchor="middle" font-family="monospace" font-size="13" fill="#6f808f">ID 2</text>
+
+  <!-- Example transfer direction. -->
+  <line x1="252" y1="159" x2="527" y2="159" stroke="#cbd5e1" stroke-width="3" marker-end="url(#arrow)"/>
+  <rect x="371" y="151" width="19" height="16" rx="2" fill="#26c6da"/>
+  <text x="392" y="221" text-anchor="middle" font-family="monospace" font-size="16" fill="#e1e9f0">READY / PEER OK</text>
+
+  <line x1="169" y1="284" x2="615" y2="284" stroke="#26333d"/>
+  <text x="188" y="312" font-family="monospace" font-size="15" fill="#e1e9f0">A  SEND</text>
+  <text x="596" y="312" text-anchor="end" font-family="monospace" font-size="15" fill="#e1e9f0">B  REQUEST</text>
+  <text x="392" y="337" text-anchor="middle" font-family="monospace" font-size="12" fill="#6f808f">local spacecraft is always on the left</text>
+
+  <text x="380" y="406" text-anchor="middle" font-family="sans-serif" font-size="15" fill="#52616d">On EYE-2 the orange spacecraft moves to the left; EYE-1 remains cyan.</text>
+</svg>
