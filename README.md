@@ -1,29 +1,30 @@
 # CCSDS EYE demo
 
-This demo turns two ESP32-S3-EYE boards into a pair of small spacecraft. They
-communicate over Wi-Fi at configured IP endpoints and exchange a test object
-using CCSDS telecommands and acknowledged CFDP file transfer.
+This demo turns two ESP32-S3-EYE boards into a pair of small "spacecraft". They
+communicate over Wi-Fi at configured IP endpoints and exchange images from the camera
+using CFDP file transfer.
 
 ## Using the demo
 
 Wait until both displays show `READY / PEER OK`. The labels at the bottom of
 the screen align with the controls on the corresponding side:
 
-- **Upper-left button — Send:** this board captures one fresh still, keeps it as
+- **Upper-left button — SEND:** this board captures one fresh still, keeps it as
   its latest image, and sends the deterministic test object to the peer.
-- **Lower-left button — Request:** this board sends a `CAPTURE_AND_RETURN`
+- **Lower-left button — REQUEST:** this board sends a `CAPTURE_AND_RETURN`
   telecommand. The peer captures one fresh still and then sends its
   deterministic test object back to this board.
-- **Either right-side button — Show:** displays the latest valid local capture
+- **Either right-side button — SHOW:** displays the latest valid local capture
   full-screen. Press either right-side button again to return to the protocol
   view. Before the first successful capture it reports `NO IMAGE` without
   changing views.
 
-In short, the upper-left control means **capture here, then send**; the
-lower-left control means **ask the other board to capture, then send**. Camera
-pixels are deliberately not the CFDP object in this version.
-
 ![ESP32-S3-EYE button locations and display layout](assets/eye-demo-guide.svg)
+
+In short, 
+
+- **SEND** means **capture here, then send**; 
+- **REQUEST** means **ask the other board to capture, then send**. 
 
 ## Configure the two boards
 
