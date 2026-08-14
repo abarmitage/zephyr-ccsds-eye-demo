@@ -84,5 +84,13 @@
   <text x="509" y="456" text-anchor="end" font-family="monospace" font-size="11" fill="#e1e9f0">SHOW &gt;</text>
   <text x="380" y="485" text-anchor="middle" font-family="monospace" font-size="10" fill="#6f808f">192.168.1.20</text>
 
-  <text x="380" y="535" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="700" fill="#cbd5e1">ESP32-S3-EYE</text>
+  <!-- System controls, distinct from the four demo buttons around the camera. -->
+  <rect x="226" y="522" width="28" height="24" rx="5" fill="#18242d" stroke="#71808c" stroke-width="2"/>
+  <circle cx="240" cy="534" r="6" fill="#9ba9b3"/>
+  <rect x="266" y="522" width="28" height="24" rx="5" fill="#18242d" stroke="#71808c" stroke-width="2"/>
+  <circle cx="280" cy="534" r="6" fill="#9ba9b3"/>
+  <text x="240" y="562" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#9ba9b3">BOOT</text>
+  <text x="280" y="562" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#9ba9b3">RESET</text>
+
+  <text x="455" y="550" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="700" fill="#cbd5e1">ESP32-S3-EYE</text>
 </svg>

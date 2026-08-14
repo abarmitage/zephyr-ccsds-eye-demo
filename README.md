@@ -25,12 +25,6 @@ pixels are deliberately not the CFDP object in this version.
 
 ![ESP32-S3-EYE button locations and display layout](assets/eye-demo-guide.svg)
 
-The display is egocentric: the board in your hand is always on the left and
-its peer is on the right. Identity colours do not change between displays:
-EYE-1 is cyan and EYE-2 is orange. The moving packet shows the actual direction
-of the telecommand or file transfer. The diagram shows the view from EYE-1;
-EYE-2 shows itself in orange on the left and EYE-1 in cyan on the right.
-
 ## Configure the two boards
 
 Create local configuration files from the supplied templates:
