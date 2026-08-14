@@ -9,6 +9,7 @@
 #include "demo_view.h"
 
 static struct demo_image_object image;
+static struct demo_image_object incoming_image;
 static uint8_t pixels[DEMO_IMAGE_PAYLOAD_SIZE];
 static struct demo_image_slot slots[DEMO_IMAGE_SLOT_COUNT];
 static struct demo_image_object store_objects[DEMO_IMAGE_SLOT_COUNT];
@@ -164,6 +165,149 @@ ZTEST(demo_image, test_ownership_rejects_invalid_transitions_and_bounds_busy)
 
 	slots[0].owners = DEMO_IMAGE_OWNER_STAGING | DEMO_IMAGE_OWNER_DISPLAY;
 	zassert_false(demo_image_store_valid(&store));
+}
+
+ZTEST(demo_image, test_cfdp_source_reads_exact_image_with_offsets_and_partials)
+{
+	struct demo_image_store store;
+	struct demo_image_source source;
+	struct demo_image_slot *latest;
+	uint8_t buffer[37];
+	void *handle;
+	uint32_t size;
+	size_t read_length;
+
+	demo_image_store_init(&store, slots, store_objects, ARRAY_SIZE(slots));
+	zassert_ok(demo_image_store_claim_staging(&store, &latest));
+	make_valid(latest->object, 9u);
+	zassert_ok(demo_image_store_promote(&store, latest));
+	zassert_ok(demo_image_store_retain_tx(&store, latest));
+	demo_image_source_init(&source);
+	zassert_ok(demo_image_source_bind(&source, latest));
+	zassert_equal(demo_image_source_open(&source, "wrong.bin", &handle, &size), -EINVAL);
+	zassert_ok(demo_image_source_open(&source, DEMO_IMAGE_SOURCE_PATH, &handle, &size));
+	zassert_equal(size, DEMO_IMAGE_OBJECT_SIZE);
+	zassert_ok(demo_image_source_read(&source, handle, 29u, buffer, sizeof(buffer),
+					  &read_length));
+	zassert_equal(read_length, sizeof(buffer));
+	zassert_mem_equal(buffer, &((uint8_t *)latest->object)[29], sizeof(buffer));
+	zassert_ok(demo_image_source_read(&source, handle, DEMO_IMAGE_OBJECT_SIZE - 11u,
+					  buffer, sizeof(buffer), &read_length));
+	zassert_equal(read_length, 11u);
+	zassert_mem_equal(buffer, &((uint8_t *)latest->object)[DEMO_IMAGE_OBJECT_SIZE - 11u],
+			  11u);
+	zassert_ok(demo_image_source_read(&source, handle, DEMO_IMAGE_OBJECT_SIZE, buffer,
+					  sizeof(buffer), &read_length));
+	zassert_equal(read_length, 0u);
+	zassert_equal(demo_image_source_read(&source, handle, DEMO_IMAGE_OBJECT_SIZE + 1u,
+					     buffer, sizeof(buffer), &read_length),
+		      -EINVAL);
+	zassert_ok(demo_image_source_close(&source, handle));
+	zassert_true((latest->owners & DEMO_IMAGE_OWNER_TX) != 0u,
+		     "source close must not release terminal ownership");
+	demo_image_source_unbind(&source);
+	zassert_ok(demo_image_store_release_tx(&store, latest));
+}
+
+ZTEST(demo_image, test_cfdp_receive_bounds_exact_size_and_atomic_promotion)
+{
+	struct demo_image_store store;
+	struct demo_image_receiver receiver;
+	struct demo_image_slot *previous;
+	struct demo_image_slot *shown;
+	void *handle;
+	const size_t split = 997u;
+
+	demo_image_store_init(&store, slots, store_objects, ARRAY_SIZE(slots));
+	zassert_ok(demo_image_store_claim_staging(&store, &previous));
+	make_valid(previous->object, 1u);
+	zassert_ok(demo_image_store_promote(&store, previous));
+	make_valid(&incoming_image, 2u);
+	demo_image_receiver_init(&receiver, &store);
+	zassert_equal(demo_image_receiver_open(&receiver, "wrong.bin", &handle), -EINVAL);
+	zassert_ok(demo_image_receiver_open(&receiver, DEMO_IMAGE_DEST_PATH, &handle));
+	zassert_equal(demo_image_receiver_write(&receiver, handle, DEMO_IMAGE_OBJECT_SIZE,
+						 incoming_image.header, 1u),
+		      -EFBIG);
+	zassert_equal(demo_image_receiver_write(&receiver, handle,
+						 DEMO_IMAGE_OBJECT_SIZE - 1u,
+						 incoming_image.header, 2u),
+		      -EFBIG);
+	zassert_ok(demo_image_receiver_write(&receiver, handle, split,
+					     &((uint8_t *)&incoming_image)[split],
+					     DEMO_IMAGE_OBJECT_SIZE - split));
+	zassert_ok(demo_image_receiver_write(&receiver, handle, 0u, (uint8_t *)&incoming_image,
+					     split));
+	zassert_ok(demo_image_receiver_close(&receiver, handle));
+	zassert_ok(demo_image_receiver_validate_complete(&receiver, DEMO_IMAGE_DEST_PATH));
+	zassert_ok(demo_image_store_acquire_display(&store, &shown));
+	zassert_equal(shown, previous, "validated staging replaced latest before terminal success");
+	zassert_ok(demo_image_store_release_display(&store, shown));
+	zassert_ok(demo_image_receiver_terminal(&receiver, true));
+	zassert_ok(demo_image_store_acquire_display(&store, &shown));
+	zassert_not_equal(shown, previous);
+	zassert_mem_equal(shown->object, &incoming_image, sizeof(incoming_image));
+	zassert_ok(demo_image_store_release_display(&store, shown));
+}
+
+ZTEST(demo_image, test_cfdp_receive_corrupt_and_incomplete_preserve_latest)
+{
+	struct demo_image_store store;
+	struct demo_image_receiver receiver;
+	struct demo_image_slot *previous;
+	struct demo_image_slot *shown;
+	void *handle;
+
+	demo_image_store_init(&store, slots, store_objects, ARRAY_SIZE(slots));
+	zassert_ok(demo_image_store_claim_staging(&store, &previous));
+	make_valid(previous->object, 3u);
+	zassert_ok(demo_image_store_promote(&store, previous));
+	make_valid(&incoming_image, 4u);
+	incoming_image.header[19] ^= 1u;
+	demo_image_receiver_init(&receiver, &store);
+	zassert_ok(demo_image_receiver_open(&receiver, DEMO_IMAGE_DEST_PATH, &handle));
+	zassert_ok(demo_image_receiver_write(&receiver, handle, 0u, (uint8_t *)&incoming_image,
+					     sizeof(incoming_image)));
+	zassert_ok(demo_image_receiver_close(&receiver, handle));
+	zassert_equal(demo_image_receiver_validate_complete(&receiver, DEMO_IMAGE_DEST_PATH),
+		      -EBADMSG);
+	zassert_ok(demo_image_receiver_terminal(&receiver, false));
+	zassert_ok(demo_image_store_acquire_display(&store, &shown));
+	zassert_equal(shown, previous);
+	zassert_ok(demo_image_store_release_display(&store, shown));
+
+	make_valid(&incoming_image, 5u);
+	zassert_ok(demo_image_receiver_open(&receiver, DEMO_IMAGE_DEST_PATH, &handle));
+	zassert_ok(demo_image_receiver_write(&receiver, handle, 0u, (uint8_t *)&incoming_image,
+					     sizeof(incoming_image) - 1u));
+	zassert_ok(demo_image_receiver_close(&receiver, handle));
+	zassert_equal(demo_image_receiver_validate_complete(&receiver, DEMO_IMAGE_DEST_PATH),
+		      -EBADMSG);
+	zassert_ok(demo_image_receiver_terminal(&receiver, false));
+	zassert_ok(demo_image_store_acquire_display(&store, &shown));
+	zassert_equal(shown, previous);
+	zassert_ok(demo_image_store_release_display(&store, shown));
+}
+
+ZTEST(demo_image, test_display_and_tx_ownership_coexist_until_explicit_terminal_release)
+{
+	struct demo_image_store store;
+	struct demo_image_slot *latest;
+	struct demo_image_slot *display;
+
+	demo_image_store_init(&store, slots, store_objects, ARRAY_SIZE(slots));
+	zassert_ok(demo_image_store_claim_staging(&store, &latest));
+	make_valid(latest->object, 6u);
+	zassert_ok(demo_image_store_promote(&store, latest));
+	zassert_ok(demo_image_store_retain_tx(&store, latest));
+	zassert_ok(demo_image_store_acquire_display(&store, &display));
+	zassert_equal(display, latest);
+	zassert_equal(latest->owners,
+		      DEMO_IMAGE_OWNER_LATEST | DEMO_IMAGE_OWNER_TX | DEMO_IMAGE_OWNER_DISPLAY);
+	zassert_ok(demo_image_store_release_display(&store, display));
+	zassert_true((latest->owners & DEMO_IMAGE_OWNER_TX) != 0u);
+	zassert_ok(demo_image_store_release_tx(&store, latest));
+	zassert_equal(latest->owners, DEMO_IMAGE_OWNER_LATEST);
 }
 
 ZTEST(demo_image, test_show_toggle_no_image_and_actions_from_image_view)

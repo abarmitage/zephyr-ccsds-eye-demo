@@ -1,7 +1,7 @@
 # CCSDS EYE demo
 
 This demo turns two ESP32-S3-EYE boards into a pair of small "spacecraft". They
-communicate over Wi-Fi at configured IP endpoints and exchange images from the camera
+communicate over Wi-Fi (UDP) at configured IP endpoints and exchange images from the camera
 using CFDP file transfer.
 
 ## Using the demo
@@ -57,15 +57,14 @@ Build both firmware roles inside the development container:
 ./build_both.sh
 ```
 
-The resulting images are available to the Fedora host through the bind-mounted
+The resulting images are available to the host through the bind-mounted
 workspace. Install `esptool` on the host if needed:
 
 ```sh
 pipx install esptool
 ```
 
-Put both boards into their serial bootloaders, then flash the already-built
-images from the host (replace the device paths if necessary):
+Flash the already-built images from the host (replace the device paths if necessary):
 
 ```sh
 ./flash_both.sh /dev/ttyACM0 /dev/ttyACM1
@@ -82,12 +81,13 @@ If the container has reliable access to both serial devices, the combined
 ## What happens during a transfer
 
 Each board sends a small status packet once per second so that its configured
-peer can become available. Pressing the upper-left control captures and
+peer can become visible. Pressing the upper-left control captures and
 validates one 240 x 240 RGB565 still before starting an acknowledged CFDP
 transfer. Pressing the lower-left control first sends a CCSDS telecommand to
 the peer; acceptance makes the peer run the same capture-first operation before
-the CFDP transfer in the opposite direction.
-Capture briefly discards nine frames so the camera's automatic adjustments can
+the CFDP transfer in the opposite direction (back to the requester)
+
+Capture briefly discards nine frames so the camera's automatic gain adjustments can
 settle, then saves the tenth complete frame.
 Capture failure preserves the previous valid image and does not start CFDP.
 

@@ -1,14 +1,13 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "demo_protocol.h"
+#include "demo_image.h"
 
 #include <errno.h>
 #include <string.h>
 
 #include <zephyr/sys/byteorder.h>
-
-#define TEST_MAGIC 0x45594532u /* EYE2 */
-#define TEST_HEADER_SIZE 12u
+#include <zephyr/sys/util.h>
 
 static bool valid_result(uint8_t result)
 {
@@ -98,7 +97,7 @@ int demo_peer_status_encode(const struct demo_peer_status *status,
 	sys_put_be16(status->command_status_apid, &buffer[28]);
 	sys_put_be16(status->peer_status_apid, &buffer[30]);
 	memcpy(&buffer[32], status->callsign, DEMO_CALLSIGN_LEN);
-	sys_put_be32(DEMO_TEST_OBJECT_SIZE, &buffer[40]);
+	sys_put_be32(DEMO_IMAGE_OBJECT_SIZE, &buffer[40]);
 	return DEMO_PEER_STATUS_LEN;
 }
 
@@ -108,7 +107,7 @@ int demo_peer_status_decode(const uint8_t *buffer, size_t length,
 	if (buffer == NULL || status == NULL || length != DEMO_PEER_STATUS_LEN ||
 	    buffer[0] != DEMO_PROTOCOL_VERSION || buffer[1] != DEMO_MSG_PEER_STATUS ||
 	    buffer[2] != 0u || buffer[3] != 0u ||
-	    sys_get_be32(&buffer[40]) != DEMO_TEST_OBJECT_SIZE) {
+	    sys_get_be32(&buffer[40]) != DEMO_IMAGE_OBJECT_SIZE) {
 		return -EINVAL;
 	}
 	memset(status, 0, sizeof(*status));
@@ -174,28 +173,10 @@ bool demo_dedup_check_and_record(struct demo_dedup_cache *cache,
 	return false;
 }
 
-void demo_test_object_generate(uint8_t object[DEMO_TEST_OBJECT_SIZE])
+uint8_t demo_transfer_percent(uint32_t bytes_transferred, uint32_t file_size)
 {
-	sys_put_be32(TEST_MAGIC, &object[0]);
-	sys_put_be16(DEMO_TEST_OBJECT_VERSION, &object[4]);
-	sys_put_be16(TEST_HEADER_SIZE, &object[6]);
-	sys_put_be32(DEMO_TEST_OBJECT_SIZE, &object[8]);
-	for (size_t i = TEST_HEADER_SIZE; i < DEMO_TEST_OBJECT_SIZE; ++i) {
-		object[i] = (uint8_t)(((i * 73u) + (i >> 3u) + 0x5au) & 0xffu);
+	if (file_size == 0u) {
+		return 0u;
 	}
-}
-
-bool demo_test_object_verify(const uint8_t *object, size_t size)
-{
-	uint8_t expected[DEMO_TEST_OBJECT_SIZE];
-
-	if (object == NULL || size != DEMO_TEST_OBJECT_SIZE ||
-	    sys_get_be32(&object[0]) != TEST_MAGIC ||
-	    sys_get_be16(&object[4]) != DEMO_TEST_OBJECT_VERSION ||
-	    sys_get_be16(&object[6]) != TEST_HEADER_SIZE ||
-	    sys_get_be32(&object[8]) != DEMO_TEST_OBJECT_SIZE) {
-		return false;
-	}
-	demo_test_object_generate(expected);
-	return memcmp(object, expected, sizeof(expected)) == 0;
+	return (uint8_t)(((uint64_t)MIN(bytes_transferred, file_size) * 100u) / file_size);
 }

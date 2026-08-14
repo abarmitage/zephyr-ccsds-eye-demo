@@ -23,11 +23,7 @@
 
 LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 
-#define CFDP_FILE_PDU_COUNT DIV_ROUND_UP(DEMO_TEST_OBJECT_SIZE, CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE)
-/* One synchronous send emits metadata, every File Data PDU, and EOF as a burst.
- * Leave room for the command response and periodic/control traffic as well.
- */
-#define RX_QUEUE_DEPTH      (CFDP_FILE_PDU_COUNT + 6u)
+#define RX_QUEUE_DEPTH      16u
 #define ROUTER_QUEUE_DEPTH  8u
 #define CFDP_EVENT_QUEUE_DEPTH 24u
 #define ACTION_QUEUE_DEPTH     4u
@@ -40,16 +36,26 @@ LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 #define REQUEST_RETENTION_MS   60000u
 #define SERVICE_POLL_MS        25u
 #define PROGRESS_UI_PERIOD_MS  100u
-#define TEST_SOURCE_NAME       "eye-test-v1.bin"
-#define TEST_DEST_NAME         "eye-received-v1.bin"
+#define CFDP_FIXED_HEADER_LEN  (4u + (2u * 1u) + 2u)
+#define CFDP_FILE_OFFSET_LEN   4u
+#define CFDP_FILE_PDU_OVERHEAD (CFDP_FIXED_HEADER_LEN + CFDP_FILE_OFFSET_LEN)
+#define CFDP_PACKET_OVERHEAD   (CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + CFDP_FILE_PDU_OVERHEAD)
 
 BUILD_ASSERT(CONFIG_CCSDS_UDP_MAX_UNIT_LEN <= 1280,
 	     "UDP unit must remain below a conservative non-fragmenting IPv4 payload");
 BUILD_ASSERT(CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + CCSDS_CFDP_MAX_PDU_SIZE <=
 		     CONFIG_CCSDS_UDP_MAX_UNIT_LEN,
 	     "CFDP Space Packet must fit one UDP datagram");
-BUILD_ASSERT(CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE < DEMO_TEST_OBJECT_SIZE,
-	     "test object must require multiple File Data PDUs");
+BUILD_ASSERT(CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE + CFDP_FILE_PDU_OVERHEAD <=
+		     CCSDS_CFDP_MAX_PDU_SIZE,
+	     "CFDP File Data PDU must fit the configured PDU buffer");
+BUILD_ASSERT(CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE + CFDP_PACKET_OVERHEAD <=
+		     CONFIG_CCSDS_UDP_MAX_UNIT_LEN,
+	     "encoded CFDP Space Packet must fit one UDP datagram");
+BUILD_ASSERT(CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE ==
+		     MIN(CCSDS_CFDP_MAX_PDU_SIZE - CFDP_FILE_PDU_OVERHEAD,
+			 CONFIG_CCSDS_UDP_MAX_UNIT_LEN - CFDP_PACKET_OVERHEAD),
+	     "select the largest non-fragmenting CFDP file-data segment");
 
 enum action_type {
 	ACTION_LOCAL_SEND,
@@ -111,13 +117,6 @@ struct progress_update {
 	uint64_t next_ui_ms;
 };
 
-struct memory_object {
-	uint8_t data[DEMO_TEST_OBJECT_SIZE];
-	uint32_t size;
-	bool open;
-	bool verified;
-};
-
 K_MSGQ_DEFINE(rx_queue, sizeof(struct rx_datagram), RX_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(router_queue, sizeof(struct router_message), ROUTER_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(action_queue, sizeof(struct action_message), ACTION_QUEUE_DEPTH, 4);
@@ -133,8 +132,6 @@ static struct ccsds_udp udp;
 static struct ccsds_router router;
 static struct ccsds_profile_input input_profile;
 static struct ccsds_cfdp_service cfdp_service;
-static struct memory_object source_object;
-static struct memory_object receive_object;
 static struct demo_dedup_cache dedup_cache;
 static bool protocol_ready;
 static bool protocol_initialized;
@@ -156,6 +153,9 @@ static struct demo_image_object image_objects[DEMO_IMAGE_SLOT_COUNT]
 	__attribute__((section(".ext_ram.bss.eye_images"), aligned(32)));
 static struct demo_image_slot image_slots[DEMO_IMAGE_SLOT_COUNT];
 static struct demo_image_store image_store;
+static struct demo_image_source image_source;
+static struct demo_image_receiver image_receiver;
+static struct demo_image_slot *tx_slot;
 static struct k_mutex image_lock;
 static struct demo_camera_adapter camera_adapter;
 static int camera_status;
@@ -193,108 +193,121 @@ static uint64_t now_ms(void *user)
 
 static int source_open_read(void *user, const char *path, void **handle, uint32_t *size)
 {
-	struct memory_object *object = user;
+	struct demo_image_source *source = user;
+	int rc;
 
-	if (strcmp(path, TEST_SOURCE_NAME) != 0 || object->open) {
-		return -EINVAL;
-	}
-	object->open = true;
-	*handle = object;
-	*size = object->size;
-	return 0;
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_source_open(source, path, handle, size);
+	k_mutex_unlock(&image_lock);
+	return rc;
 }
 
-static int object_read(void *user, void *handle, uint32_t offset, uint8_t *buffer, size_t length,
+static int source_read(void *user, void *handle, uint32_t offset, uint8_t *buffer, size_t length,
 		       size_t *read_length)
 {
-	struct memory_object *object = handle;
-	size_t available;
+	struct demo_image_source *source = user;
+	int rc;
 
-	ARG_UNUSED(user);
-	if (object == NULL || !object->open || offset > object->size) {
-		return -EINVAL;
-	}
-	available = object->size - offset;
-	*read_length = MIN(length, available);
-	memcpy(buffer, &object->data[offset], *read_length);
-	return 0;
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_source_read(source, handle, offset, buffer, length, read_length);
+	k_mutex_unlock(&image_lock);
+	return rc;
 }
 
-static int object_close(void *user, void *handle)
+static int source_close(void *user, void *handle)
 {
-	struct memory_object *object = handle;
+	struct demo_image_source *source = user;
+	int rc;
 
-	ARG_UNUSED(user);
-	if (object == NULL || !object->open) {
-		return -EINVAL;
-	}
-	object->open = false;
-	return 0;
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_source_close(source, handle);
+	k_mutex_unlock(&image_lock);
+	return rc;
 }
 
 static int receive_open_write(void *user, const char *path, void **handle)
 {
-	struct memory_object *object = user;
+	struct demo_image_receiver *receiver = user;
+	int rc;
 
-	if (strcmp(path, TEST_DEST_NAME) != 0 || object->open) {
-		return -EINVAL;
-	}
-	memset(object, 0, sizeof(*object));
-	object->open = true;
-	*handle = object;
-	return 0;
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_receiver_open(receiver, path, handle);
+	k_mutex_unlock(&image_lock);
+	return rc;
 }
 
 static int receive_write(void *user, void *handle, uint32_t offset, const uint8_t *buffer,
 			 size_t length)
 {
-	struct memory_object *object = handle;
-	size_t end = (size_t)offset + length;
+	struct demo_image_receiver *receiver = user;
+	int rc;
 
-	ARG_UNUSED(user);
-	if (object == NULL || !object->open || end > sizeof(object->data)) {
-		return -EFBIG;
-	}
-	memcpy(&object->data[offset], buffer, length);
-	object->size = MAX(object->size, (uint32_t)end);
-	return 0;
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_receiver_write(receiver, handle, offset, buffer, length);
+	k_mutex_unlock(&image_lock);
+	return rc;
 }
 
 static int receive_commit(void *user, const char *path)
 {
-	struct memory_object *object = user;
+	struct demo_image_receiver *receiver = user;
+	int rc;
 
-	if (strcmp(path, TEST_DEST_NAME) != 0) {
-		return -EINVAL;
-	}
 	ui_event(DEMO_UI_VERIFYING, 0u, 0);
-	object->verified = demo_test_object_verify(object->data, object->size);
-	LOG_INF("CFDP RX object verification %s", object->verified ? "passed" : "failed");
-	return object->verified ? 0 : -EBADMSG;
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_receiver_validate_complete(receiver, path);
+	k_mutex_unlock(&image_lock);
+	LOG_INF("CFDP RX image validation %s", rc == 0 ? "passed" : "failed");
+	return rc;
 }
 
 static int receive_discard(void *user, const char *path)
 {
-	struct memory_object *object = user;
+	struct demo_image_receiver *receiver = user;
+	int rc;
 
-	ARG_UNUSED(path);
-	memset(object, 0, sizeof(*object));
-	return 0;
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_receiver_discard(receiver, path);
+	k_mutex_unlock(&image_lock);
+	return rc;
+}
+
+static int receive_read(void *user, void *handle, uint32_t offset, uint8_t *buffer,
+			size_t length, size_t *read_length)
+{
+	ARG_UNUSED(user);
+	ARG_UNUSED(handle);
+	ARG_UNUSED(offset);
+	ARG_UNUSED(buffer);
+	ARG_UNUSED(length);
+	ARG_UNUSED(read_length);
+	return -ENOTSUP;
+}
+
+static int receive_close(void *user, void *handle)
+{
+	struct demo_image_receiver *receiver = user;
+	int rc;
+
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_receiver_close(receiver, handle);
+	k_mutex_unlock(&image_lock);
+	return rc;
 }
 
 static const ccsds_cfdp_filestore_ops_t source_ops = {
-	.user = &source_object,
+	.user = &image_source,
 	.open_read = source_open_read,
-	.read = object_read,
-	.close = object_close,
+	.read = source_read,
+	.close = source_close,
 };
 
 static const ccsds_cfdp_filestore_ops_t receive_ops = {
-	.user = &receive_object,
+	.user = &image_receiver,
 	.open_write_tmp = receive_open_write,
-	.read = object_read,
+	.read = receive_read,
 	.write = receive_write,
-	.close = object_close,
+	.close = receive_close,
 	.commit_tmp = receive_commit,
 	.discard_tmp = receive_discard,
 };
@@ -457,8 +470,8 @@ static int start_send_operation(const struct send_operation *operation)
 	struct demo_image_slot *staging = NULL;
 	ccsds_cfdp_transaction_id_t transaction_id;
 	const ccsds_cfdp_put_request_t request = {
-		.source_path = TEST_SOURCE_NAME,
-		.destination_path = TEST_DEST_NAME,
+		.source_path = DEMO_IMAGE_SOURCE_PATH,
+		.destination_path = DEMO_IMAGE_DEST_PATH,
 		.checksum_type = CCSDS_CFDP_CHECKSUM_TYPE_MODULAR,
 		.closure_requested = true,
 		.acknowledged_mode = true,
@@ -494,6 +507,18 @@ static int start_send_operation(const struct send_operation *operation)
 	}
 	k_mutex_lock(&image_lock, K_FOREVER);
 	rc = demo_image_store_promote(&image_store, staging);
+	if (rc == 0) {
+		rc = demo_image_store_retain_tx(&image_store, staging);
+	}
+	if (rc == 0) {
+		rc = demo_image_source_bind(&image_source, staging);
+	}
+	if (rc == 0) {
+		tx_slot = staging;
+	}
+	if (rc != 0 && (staging->owners & DEMO_IMAGE_OWNER_TX) != 0u) {
+		(void)demo_image_store_release_tx(&image_store, staging);
+	}
 	k_mutex_unlock(&image_lock);
 	if (rc != 0) {
 		operation_active = false;
@@ -506,6 +531,14 @@ static int start_send_operation(const struct send_operation *operation)
 	status =
 		ccsds_cfdp_service_send_file(&cfdp_service, &source_ops, &request, &transaction_id);
 	if (status != CCSDS_CFDP_STATUS_OK) {
+		k_mutex_lock(&image_lock, K_FOREVER);
+		if (tx_slot != NULL) {
+			__ASSERT_NO_MSG(!image_source.open);
+			demo_image_source_unbind(&image_source);
+			(void)demo_image_store_release_tx(&image_store, tx_slot);
+			tx_slot = NULL;
+		}
+		k_mutex_unlock(&image_lock);
 		operation_active = false;
 		outgoing_active = false;
 		ui_event(DEMO_UI_FAILED, operation->request_id, status);
@@ -693,8 +726,23 @@ static void process_cfdp_events(uint64_t now)
 			progress->pending = true;
 			flush_progress(progress, direction, now, true);
 
-			if (!sender) {
-				success = success && receive_object.verified;
+			if (sender) {
+				k_mutex_lock(&image_lock, K_FOREVER);
+				if (tx_slot != NULL) {
+					__ASSERT_NO_MSG(!image_source.open);
+					demo_image_source_unbind(&image_source);
+					__ASSERT_NO_MSG(demo_image_store_release_tx(
+							&image_store, tx_slot) == 0);
+					tx_slot = NULL;
+				}
+				k_mutex_unlock(&image_lock);
+			} else {
+				int image_rc;
+
+				k_mutex_lock(&image_lock, K_FOREVER);
+				image_rc = demo_image_receiver_terminal(&image_receiver, success);
+				k_mutex_unlock(&image_lock);
+				success = success && image_rc == 0;
 			}
 			LOG_INF("CFDP %s terminal event=%u status=%d transaction=%llu:%llu",
 				sender ? "TX" : "RX", message.event.type, message.event.status,
@@ -819,8 +867,6 @@ static int initialize_protocol(void)
 	};
 	int rc;
 
-	demo_test_object_generate(source_object.data);
-	source_object.size = sizeof(source_object.data);
 	ccsds_router_init(&router);
 	ccsds_profile_input_init(&input_profile, &router, NULL);
 	if (ccsds_udp_init(&udp, &udp_config) != 0 ||
@@ -944,6 +990,8 @@ int demo_service_start(void)
 {
 	k_mutex_init(&image_lock);
 	demo_image_store_init(&image_store, image_slots, image_objects, ARRAY_SIZE(image_slots));
+	demo_image_source_init(&image_source);
+	demo_image_receiver_init(&image_receiver, &image_store);
 	wifi_iface = net_if_get_wifi_sta();
 	if (wifi_iface == NULL) {
 		return -ENODEV;

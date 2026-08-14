@@ -495,14 +495,8 @@ void demo_ui_handle_event(const struct demo_ui_event *event)
 		set_state(cfdp_tx_active ? DEMO_DUPLEX : DEMO_RX, now);
 		break;
 	case DEMO_UI_CFDP_PROGRESS: {
-		uint32_t percent = 0u;
-
-		if (event->file_size > 0u) {
-			percent = (uint32_t)(((uint64_t)MIN(event->bytes_transferred,
-							    event->file_size) *
-					      100u) /
-					     event->file_size);
-		}
+		uint32_t percent =
+			demo_transfer_percent(event->bytes_transferred, event->file_size);
 		if (event->detail == DEMO_TRANSFER_TX) {
 			lv_bar_set_value(tx_bar, (int32_t)percent, LV_ANIM_OFF);
 		} else {

@@ -16,6 +16,8 @@
 #define DEMO_IMAGE_HEADER_SIZE  32u
 #define DEMO_IMAGE_OBJECT_SIZE  (DEMO_IMAGE_HEADER_SIZE + DEMO_IMAGE_PAYLOAD_SIZE)
 #define DEMO_IMAGE_SLOT_COUNT   3u
+#define DEMO_IMAGE_SOURCE_PATH  "eye-image-v1.bin"
+#define DEMO_IMAGE_DEST_PATH    "eye-received-image-v1.bin"
 
 enum demo_image_pixel_format {
 	DEMO_IMAGE_PIXEL_FORMAT_RGB565 = 1,
@@ -57,6 +59,19 @@ struct demo_image_store {
 	size_t slot_count;
 };
 
+struct demo_image_source {
+	struct demo_image_slot *slot;
+	bool open;
+};
+
+struct demo_image_receiver {
+	struct demo_image_store *store;
+	struct demo_image_slot *staging;
+	size_t extent;
+	bool open;
+	bool validated;
+};
+
 struct demo_camera_frame_info {
 	uint16_t width;
 	uint16_t height;
@@ -95,5 +110,26 @@ int demo_image_store_acquire_display(struct demo_image_store *store, struct demo
 int demo_image_store_release_display(struct demo_image_store *store, struct demo_image_slot *slot);
 int demo_image_store_retain_tx(struct demo_image_store *store, struct demo_image_slot *slot);
 int demo_image_store_release_tx(struct demo_image_store *store, struct demo_image_slot *slot);
+
+void demo_image_source_init(struct demo_image_source *source);
+int demo_image_source_bind(struct demo_image_source *source, struct demo_image_slot *slot);
+int demo_image_source_open(struct demo_image_source *source, const char *path, void **handle,
+			   uint32_t *size);
+int demo_image_source_read(struct demo_image_source *source, void *handle, uint32_t offset,
+			   uint8_t *buffer, size_t length, size_t *read_length);
+int demo_image_source_close(struct demo_image_source *source, void *handle);
+void demo_image_source_unbind(struct demo_image_source *source);
+
+void demo_image_receiver_init(struct demo_image_receiver *receiver,
+			      struct demo_image_store *store);
+int demo_image_receiver_open(struct demo_image_receiver *receiver, const char *path,
+			     void **handle);
+int demo_image_receiver_write(struct demo_image_receiver *receiver, void *handle,
+			      uint32_t offset, const uint8_t *buffer, size_t length);
+int demo_image_receiver_close(struct demo_image_receiver *receiver, void *handle);
+int demo_image_receiver_validate_complete(struct demo_image_receiver *receiver,
+					 const char *path);
+int demo_image_receiver_discard(struct demo_image_receiver *receiver, const char *path);
+int demo_image_receiver_terminal(struct demo_image_receiver *receiver, bool success);
 
 #endif /* CCSDS_EYE_DEMO_IMAGE_H */

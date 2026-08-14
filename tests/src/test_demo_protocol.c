@@ -4,6 +4,7 @@
 
 #include <zephyr/ztest.h>
 
+#include "demo_image.h"
 #include "demo_protocol.h"
 
 ZTEST(demo_protocol, test_command_and_status_codecs)
@@ -113,19 +114,18 @@ ZTEST(demo_protocol, test_peer_validation_diagnoses_identity_and_configuration)
 		      DEMO_PEER_CONFIG_MISMATCH);
 }
 
-ZTEST(demo_protocol, test_fixed_test_object_version_size_and_bytes)
+ZTEST(demo_protocol, test_image_transfer_progress_uses_exact_object_size)
 {
-	uint8_t object[DEMO_TEST_OBJECT_SIZE];
-
-	demo_test_object_generate(object);
-	zassert_true(demo_test_object_verify(object, sizeof(object)));
-	zassert_false(demo_test_object_verify(object, sizeof(object) - 1u));
-	object[DEMO_TEST_OBJECT_SIZE / 2u] ^= 0x80u;
-	zassert_false(demo_test_object_verify(object, sizeof(object)));
-	demo_test_object_generate(object);
-	object[4] = 0u;
-	object[5] = DEMO_TEST_OBJECT_VERSION + 1u;
-	zassert_false(demo_test_object_verify(object, sizeof(object)));
+	zassert_equal(DEMO_IMAGE_OBJECT_SIZE, 115232u);
+	zassert_equal(demo_transfer_percent(0u, DEMO_IMAGE_OBJECT_SIZE), 0u);
+	zassert_equal(demo_transfer_percent(DEMO_IMAGE_OBJECT_SIZE - 1u,
+					    DEMO_IMAGE_OBJECT_SIZE),
+		      99u);
+	zassert_equal(demo_transfer_percent(DEMO_IMAGE_OBJECT_SIZE, DEMO_IMAGE_OBJECT_SIZE),
+		      100u);
+	zassert_equal(demo_transfer_percent(DEMO_IMAGE_OBJECT_SIZE + 1u,
+					    DEMO_IMAGE_OBJECT_SIZE),
+		      100u);
 }
 
 ZTEST_SUITE(demo_protocol, NULL, NULL, NULL, NULL, NULL);

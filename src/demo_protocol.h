@@ -12,8 +12,6 @@
 #define DEMO_CAPTURE_COMMAND_LEN 12u
 #define DEMO_COMMAND_STATUS_LEN 16u
 #define DEMO_PEER_STATUS_LEN 44u
-#define DEMO_TEST_OBJECT_VERSION 1u
-#define DEMO_TEST_OBJECT_SIZE 1536u
 #define DEMO_DEDUP_CAPACITY 8u
 
 enum demo_message_type {
@@ -107,7 +105,5 @@ demo_peer_status_validate(const struct demo_peer_status *status,
 bool demo_dedup_check_and_record(struct demo_dedup_cache *cache,
 				 uint64_t entity_id, uint32_t request_id,
 				 uint64_t now_ms, uint64_t retention_ms);
-void demo_test_object_generate(uint8_t object[DEMO_TEST_OBJECT_SIZE]);
-bool demo_test_object_verify(const uint8_t *object, size_t size);
-
+uint8_t demo_transfer_percent(uint32_t bytes_transferred, uint32_t file_size);
 #endif /* CCSDS_EYE_DEMO_PROTOCOL_H */

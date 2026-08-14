@@ -287,3 +287,178 @@ int demo_image_store_release_tx(struct demo_image_store *store, struct demo_imag
 	assert_store(store);
 	return 0;
 }
+
+void demo_image_source_init(struct demo_image_source *source)
+{
+	__ASSERT_NO_MSG(source != NULL);
+	memset(source, 0, sizeof(*source));
+}
+
+int demo_image_source_bind(struct demo_image_source *source, struct demo_image_slot *slot)
+{
+	if (source == NULL || slot == NULL || source->slot != NULL || source->open ||
+	    (slot->owners & DEMO_IMAGE_OWNER_TX) == 0u ||
+	    demo_image_validate(slot->object, sizeof(*slot->object)) != 0) {
+		return -EINVAL;
+	}
+	source->slot = slot;
+	return 0;
+}
+
+int demo_image_source_open(struct demo_image_source *source, const char *path, void **handle,
+			   uint32_t *size)
+{
+	if (source == NULL || path == NULL || handle == NULL || size == NULL ||
+	    strcmp(path, DEMO_IMAGE_SOURCE_PATH) != 0 || source->slot == NULL || source->open ||
+	    (source->slot->owners & DEMO_IMAGE_OWNER_TX) == 0u) {
+		return -EINVAL;
+	}
+	source->open = true;
+	*handle = source->slot->object;
+	*size = DEMO_IMAGE_OBJECT_SIZE;
+	return 0;
+}
+
+int demo_image_source_read(struct demo_image_source *source, void *handle, uint32_t offset,
+			   uint8_t *buffer, size_t length, size_t *read_length)
+{
+	size_t available;
+
+	if (source == NULL || handle == NULL || buffer == NULL || read_length == NULL ||
+	    !source->open || source->slot == NULL || handle != source->slot->object ||
+	    offset > DEMO_IMAGE_OBJECT_SIZE ||
+	    (source->slot->owners & DEMO_IMAGE_OWNER_TX) == 0u) {
+		return -EINVAL;
+	}
+	available = DEMO_IMAGE_OBJECT_SIZE - offset;
+	*read_length = MIN(length, available);
+	memcpy(buffer, &((const uint8_t *)source->slot->object)[offset], *read_length);
+	return 0;
+}
+
+int demo_image_source_close(struct demo_image_source *source, void *handle)
+{
+	if (source == NULL || !source->open || source->slot == NULL ||
+	    handle != source->slot->object) {
+		return -EINVAL;
+	}
+	source->open = false;
+	return 0;
+}
+
+void demo_image_source_unbind(struct demo_image_source *source)
+{
+	__ASSERT_NO_MSG(source != NULL);
+	__ASSERT_NO_MSG(!source->open);
+	source->slot = NULL;
+}
+
+void demo_image_receiver_init(struct demo_image_receiver *receiver,
+			      struct demo_image_store *store)
+{
+	__ASSERT_NO_MSG(receiver != NULL);
+	__ASSERT_NO_MSG(demo_image_store_valid(store));
+	memset(receiver, 0, sizeof(*receiver));
+	receiver->store = store;
+}
+
+int demo_image_receiver_open(struct demo_image_receiver *receiver, const char *path,
+			     void **handle)
+{
+	int rc;
+
+	if (receiver == NULL || path == NULL || handle == NULL ||
+	    strcmp(path, DEMO_IMAGE_DEST_PATH) != 0 || receiver->open ||
+	    receiver->staging != NULL || !demo_image_store_valid(receiver->store)) {
+		return -EINVAL;
+	}
+	rc = demo_image_store_claim_staging(receiver->store, &receiver->staging);
+	if (rc != 0) {
+		return rc;
+	}
+	memset(receiver->staging->object, 0, sizeof(*receiver->staging->object));
+	receiver->extent = 0u;
+	receiver->validated = false;
+	receiver->open = true;
+	*handle = receiver->staging->object;
+	return 0;
+}
+
+int demo_image_receiver_write(struct demo_image_receiver *receiver, void *handle,
+			      uint32_t offset, const uint8_t *buffer, size_t length)
+{
+	size_t end;
+
+	if (receiver == NULL || handle == NULL || (buffer == NULL && length != 0u) ||
+	    !receiver->open || receiver->staging == NULL ||
+	    handle != receiver->staging->object) {
+		return -EINVAL;
+	}
+	if (offset > DEMO_IMAGE_OBJECT_SIZE || length > DEMO_IMAGE_OBJECT_SIZE - offset) {
+		return -EFBIG;
+	}
+	end = (size_t)offset + length;
+	if (length != 0u) {
+		memcpy(&((uint8_t *)receiver->staging->object)[offset], buffer, length);
+	}
+	receiver->extent = MAX(receiver->extent, end);
+	return 0;
+}
+
+int demo_image_receiver_close(struct demo_image_receiver *receiver, void *handle)
+{
+	if (receiver == NULL || !receiver->open || receiver->staging == NULL ||
+	    handle != receiver->staging->object) {
+		return -EINVAL;
+	}
+	receiver->open = false;
+	return 0;
+}
+
+int demo_image_receiver_validate_complete(struct demo_image_receiver *receiver,
+					 const char *path)
+{
+	if (receiver == NULL || path == NULL || strcmp(path, DEMO_IMAGE_DEST_PATH) != 0 ||
+	    receiver->open || receiver->staging == NULL || receiver->validated ||
+	    receiver->extent != DEMO_IMAGE_OBJECT_SIZE ||
+	    demo_image_validate(receiver->staging->object, receiver->extent) != 0) {
+		return -EBADMSG;
+	}
+	receiver->validated = true;
+	return 0;
+}
+
+int demo_image_receiver_discard(struct demo_image_receiver *receiver, const char *path)
+{
+	if (receiver == NULL || path == NULL || strcmp(path, DEMO_IMAGE_DEST_PATH) != 0) {
+		return -EINVAL;
+	}
+	return demo_image_receiver_terminal(receiver, false);
+}
+
+int demo_image_receiver_terminal(struct demo_image_receiver *receiver, bool success)
+{
+	int rc = 0;
+
+	if (receiver == NULL || receiver->store == NULL) {
+		return -EINVAL;
+	}
+	if (receiver->staging == NULL) {
+		return success ? -EINVAL : 0;
+	}
+	if (receiver->open) {
+		receiver->open = false;
+	}
+	if (success && receiver->validated) {
+		rc = demo_image_store_promote(receiver->store, receiver->staging);
+	} else {
+		rc = demo_image_store_abort_staging(receiver->store, receiver->staging);
+		if (success && rc == 0) {
+			rc = -EBADMSG;
+		}
+	}
+	receiver->staging = NULL;
+	receiver->extent = 0u;
+	receiver->validated = false;
+	return rc;
+}
