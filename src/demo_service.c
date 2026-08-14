@@ -38,7 +38,7 @@ LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 #define PROGRESS_UI_PERIOD_MS  100u
 #define PRE_CAPTURE_QUIET_PERIOD_MS  250u
 #define POST_CAPTURE_QUIET_PERIOD_MS 250u
-#define CFDP_SEND_PACING_MS           10u
+#define CFDP_SEND_PACING_MS           50u
 #define CFDP_FIXED_HEADER_LEN  (4u + (2u * 1u) + 2u)
 #define CFDP_FILE_OFFSET_LEN   4u
 #define CFDP_FILE_PDU_OVERHEAD (CFDP_FIXED_HEADER_LEN + CFDP_FILE_OFFSET_LEN)
@@ -173,6 +173,7 @@ static struct demo_image_receiver image_receiver;
 static struct demo_image_slot *tx_slot;
 
 static void send_peer_status(void);
+static void process_progress_snapshots(uint64_t now);
 static struct k_mutex image_lock;
 static struct demo_camera_adapter camera_adapter;
 static int camera_status;
@@ -463,6 +464,7 @@ static int send_cfdp_packet(void *user, const uint8_t *packet, size_t length)
 			next_status_ms = now + STATUS_PERIOD_MS;
 		}
 		k_sleep(K_MSEC(CFDP_SEND_PACING_MS));
+		process_progress_snapshots((uint64_t)k_uptime_get());
 	}
 	return rc;
 }

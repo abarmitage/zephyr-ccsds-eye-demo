@@ -17,7 +17,7 @@ LOG_MODULE_REGISTER(eye_camera, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define CAMERA_BUFFER_COUNT  2u
 /* Let automatic exposure, gain, and white balance settle before saving a still. */
-#define CAMERA_SETTLE_FRAMES 9u
+#define CAMERA_SETTLE_FRAMES 20u
 #define CAMERA_CAPTURE_FRAME (CAMERA_SETTLE_FRAMES + 1u)
 #define CAMERA_TIMEOUT       K_SECONDS(2)
 

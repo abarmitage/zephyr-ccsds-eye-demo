@@ -60,8 +60,6 @@ static lv_obj_t *tx_packet;
 static lv_obj_t *rx_packet;
 static lv_obj_t *tx_bar;
 static lv_obj_t *rx_bar;
-static lv_obj_t *tx_caption;
-static lv_obj_t *rx_caption;
 static lv_color_t local_accent;
 static lv_color_t peer_accent;
 static enum demo_state state;
@@ -107,11 +105,9 @@ static void set_activity(bool tx, bool rx)
 	set_hidden(tx_track, !tx);
 	set_hidden(tx_packet, !tx);
 	set_hidden(tx_bar, !tx);
-	set_hidden(tx_caption, !tx);
 	set_hidden(rx_track, !rx);
 	set_hidden(rx_packet, !rx);
 	set_hidden(rx_bar, !rx);
-	set_hidden(rx_caption, !rx);
 }
 
 static void set_state(enum demo_state next, uint32_t now_ms)
@@ -136,13 +132,11 @@ static void set_state(enum demo_state next, uint32_t now_ms)
 		set_activity(true, false);
 		lv_label_set_text(status_label, "CFDP TX ACTIVE");
 		lv_obj_set_style_bg_color(tx_packet, local_accent, 0);
-		lv_obj_set_style_text_color(tx_caption, local_accent, 0);
 		break;
 	case DEMO_RX:
 		set_activity(false, true);
 		lv_label_set_text(status_label, "CFDP RX ACTIVE");
 		lv_obj_set_style_bg_color(rx_packet, peer_accent, 0);
-		lv_obj_set_style_text_color(rx_caption, peer_accent, 0);
 		break;
 	case DEMO_REQUEST:
 		set_activity(true, false);
@@ -162,8 +156,6 @@ static void set_state(enum demo_state next, uint32_t now_ms)
 		lv_label_set_text(status_label, "CFDP DUPLEX");
 		lv_obj_set_style_bg_color(tx_packet, local_accent, 0);
 		lv_obj_set_style_bg_color(rx_packet, peer_accent, 0);
-		lv_obj_set_style_text_color(tx_caption, local_accent, 0);
-		lv_obj_set_style_text_color(rx_caption, peer_accent, 0);
 		break;
 	case DEMO_VERIFYING_STATE:
 		set_activity(false, false);
@@ -197,11 +189,6 @@ static void update_packet(lv_obj_t *packet, lv_obj_t *bar, uint32_t progress, bo
 
 	lv_obj_set_x(packet, x);
 	ARG_UNUSED(bar);
-}
-
-static uint32_t transfer_progress(uint32_t elapsed)
-{
-	return MIN(elapsed, TRANSFER_ANIMATION_MS) * 100U / TRANSFER_ANIMATION_MS;
 }
 
 static uint32_t tc_progress(uint32_t elapsed)
@@ -273,16 +260,6 @@ void demo_ui_init(void)
 	tx_packet = solid_obj(screen, TRACK_X, 47, PACKET_WIDTH, 9, color_cyan);
 	rx_packet = solid_obj(screen, TRACK_X + TRACK_WIDTH - PACKET_WIDTH, 72, PACKET_WIDTH, 9,
 			      color_cyan);
-
-	tx_caption = lv_label_create(screen);
-	lv_label_set_text(tx_caption, "TX");
-	lv_obj_set_style_text_color(tx_caption, color_cyan, 0);
-	lv_obj_set_pos(tx_caption, 30, 44);
-
-	rx_caption = lv_label_create(screen);
-	lv_label_set_text(rx_caption, "RX");
-	lv_obj_set_style_text_color(rx_caption, color_cyan, 0);
-	lv_obj_set_pos(rx_caption, 30, 69);
 
 	status_label = lv_label_create(screen);
 	lv_label_set_text_fmt(status_label, "%s  /  WIFI --", CONFIG_EYE_DEMO_LOCAL_IPV4);
@@ -452,13 +429,11 @@ void demo_ui_handle_event(const struct demo_ui_event *event)
 		break;
 	case DEMO_UI_TC_TX:
 		tc_incoming = false;
-		lv_label_set_text(tx_caption, "TC TX");
 		set_state(DEMO_REQUEST, now);
 		break;
 	case DEMO_UI_TC_RX:
 		tc_incoming = true;
 		set_state(DEMO_REQUEST, now);
-		lv_label_set_text(tx_caption, "TC RX");
 		lv_label_set_text(status_label, "TC REQUEST RECEIVED");
 		break;
 	case DEMO_UI_COMMAND_RESULT:
@@ -484,14 +459,14 @@ void demo_ui_handle_event(const struct demo_ui_event *event)
 		completion_pending = false;
 		cfdp_tx_active = true;
 		lv_bar_set_value(tx_bar, 0, LV_ANIM_OFF);
-		lv_label_set_text(tx_caption, "TO");
+		update_packet(tx_packet, tx_bar, 0u, false);
 		set_state(cfdp_rx_active ? DEMO_DUPLEX : DEMO_TX, now);
 		break;
 	case DEMO_UI_CFDP_RX:
 		completion_pending = false;
 		cfdp_rx_active = true;
 		lv_bar_set_value(rx_bar, 0, LV_ANIM_OFF);
-		lv_label_set_text(rx_caption, "FROM");
+		update_packet(rx_packet, rx_bar, 0u, true);
 		set_state(cfdp_tx_active ? DEMO_DUPLEX : DEMO_RX, now);
 		break;
 	case DEMO_UI_CFDP_PROGRESS: {
@@ -499,8 +474,10 @@ void demo_ui_handle_event(const struct demo_ui_event *event)
 			demo_transfer_percent(event->bytes_transferred, event->file_size);
 		if (event->detail == DEMO_TRANSFER_TX) {
 			lv_bar_set_value(tx_bar, (int32_t)percent, LV_ANIM_OFF);
+			update_packet(tx_packet, tx_bar, percent, false);
 		} else {
 			lv_bar_set_value(rx_bar, (int32_t)percent, LV_ANIM_OFF);
+			update_packet(rx_packet, rx_bar, percent, true);
 		}
 		if (event->recovery_activity) {
 			lv_label_set_text(status_label, event->detail == DEMO_TRANSFER_TX
@@ -562,8 +539,8 @@ void demo_ui_tick(uint32_t now_ms)
 
 	switch (state) {
 	case DEMO_TX:
-		progress = transfer_progress(elapsed);
-		update_packet(tx_packet, tx_bar, progress, false);
+	case DEMO_RX:
+	case DEMO_DUPLEX:
 		break;
 	case DEMO_REQUEST:
 		progress = tc_progress(elapsed);
@@ -571,15 +548,6 @@ void demo_ui_tick(uint32_t now_ms)
 		break;
 	case DEMO_CAPTURING_STATE:
 	case DEMO_BUSY_STATE:
-		break;
-	case DEMO_RX:
-		progress = transfer_progress(elapsed);
-		update_packet(rx_packet, rx_bar, progress, true);
-		break;
-	case DEMO_DUPLEX:
-		progress = transfer_progress(elapsed);
-		update_packet(tx_packet, tx_bar, progress, false);
-		update_packet(rx_packet, rx_bar, progress, true);
 		break;
 	case DEMO_COMPLETE:
 	case DEMO_FAILED:
