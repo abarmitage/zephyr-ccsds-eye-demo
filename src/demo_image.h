@@ -126,6 +126,8 @@ int demo_image_receiver_open(struct demo_image_receiver *receiver, const char *p
 			     void **handle);
 int demo_image_receiver_write(struct demo_image_receiver *receiver, void *handle,
 			      uint32_t offset, const uint8_t *buffer, size_t length);
+int demo_image_receiver_read(struct demo_image_receiver *receiver, void *handle, uint32_t offset,
+			     uint8_t *buffer, size_t length, size_t *read_length);
 int demo_image_receiver_close(struct demo_image_receiver *receiver, void *handle);
 int demo_image_receiver_validate_complete(struct demo_image_receiver *receiver,
 					 const char *path);

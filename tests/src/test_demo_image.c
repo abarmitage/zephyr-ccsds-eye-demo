@@ -167,6 +167,33 @@ ZTEST(demo_image, test_ownership_rejects_invalid_transitions_and_bounds_busy)
 	zassert_false(demo_image_store_valid(&store));
 }
 
+ZTEST(demo_image, test_repeated_send_terminal_cycles_recycle_image_slots)
+{
+	struct demo_image_store store;
+	struct demo_image_source source;
+
+	demo_image_store_init(&store, slots, store_objects, ARRAY_SIZE(slots));
+	demo_image_source_init(&source);
+	for (uint8_t cycle = 0u; cycle < 8u; ++cycle) {
+		struct demo_image_slot *staging;
+		void *handle;
+		uint32_t size;
+
+		zassert_ok(demo_image_store_claim_staging(&store, &staging),
+			   "staging unavailable on cycle %u", cycle);
+		make_valid(staging->object, cycle);
+		zassert_ok(demo_image_store_promote(&store, staging));
+		zassert_ok(demo_image_store_retain_tx(&store, staging));
+		zassert_ok(demo_image_source_bind(&source, staging));
+		zassert_ok(demo_image_source_open(&source, DEMO_IMAGE_SOURCE_PATH, &handle, &size));
+		zassert_equal(size, DEMO_IMAGE_OBJECT_SIZE);
+		zassert_ok(demo_image_source_close(&source, handle));
+		demo_image_source_unbind(&source);
+		zassert_ok(demo_image_store_release_tx(&store, staging));
+		zassert_true(demo_image_store_valid(&store));
+	}
+}
+
 ZTEST(demo_image, test_cfdp_source_reads_exact_image_with_offsets_and_partials)
 {
 	struct demo_image_store store;
@@ -217,6 +244,8 @@ ZTEST(demo_image, test_cfdp_receive_bounds_exact_size_and_atomic_promotion)
 	struct demo_image_slot *shown;
 	void *handle;
 	const size_t split = 997u;
+	uint8_t checksum_buffer[31];
+	size_t read_length;
 
 	demo_image_store_init(&store, slots, store_objects, ARRAY_SIZE(slots));
 	zassert_ok(demo_image_store_claim_staging(&store, &previous));
@@ -238,6 +267,14 @@ ZTEST(demo_image, test_cfdp_receive_bounds_exact_size_and_atomic_promotion)
 					     DEMO_IMAGE_OBJECT_SIZE - split));
 	zassert_ok(demo_image_receiver_write(&receiver, handle, 0u, (uint8_t *)&incoming_image,
 					     split));
+	zassert_ok(demo_image_receiver_read(&receiver, handle, 29u, checksum_buffer,
+					    sizeof(checksum_buffer), &read_length));
+	zassert_equal(read_length, sizeof(checksum_buffer));
+	zassert_mem_equal(checksum_buffer, &((uint8_t *)&incoming_image)[29],
+			  sizeof(checksum_buffer));
+	zassert_ok(demo_image_receiver_read(&receiver, handle, DEMO_IMAGE_OBJECT_SIZE,
+					    checksum_buffer, sizeof(checksum_buffer), &read_length));
+	zassert_equal(read_length, 0u);
 	zassert_ok(demo_image_receiver_close(&receiver, handle));
 	zassert_ok(demo_image_receiver_validate_complete(&receiver, DEMO_IMAGE_DEST_PATH));
 	zassert_ok(demo_image_store_acquire_display(&store, &shown));

@@ -3,5 +3,5 @@ build*/
 twister-out*/
 local.conf
 wifi.conf
-conf/site-a.conf
-conf/site-b.conf
+conf/eye-1.conf
+conf/eye-2.conf

@@ -5,8 +5,8 @@ set -euo pipefail
 
 usage()
 {
-	echo "Usage: $0 <role-a-serial-device> <role-b-serial-device>" >&2
-	echo "Example: $0 /dev/serial/by-id/role-a /dev/serial/by-id/role-b" >&2
+	echo "Usage: $0 <eye-1-serial-device> <eye-2-serial-device>" >&2
+	echo "Example: $0 /dev/serial/by-id/eye-1 /dev/serial/by-id/eye-2" >&2
 }
 
 if [[ $# -ne 2 ]]; then
@@ -41,7 +41,7 @@ for device in "${role_a_device}" "${role_b_device}"; do
 done
 
 if [[ "${role_a_device}" == "${role_b_device}" ]]; then
-	echo "Role A and Role B must use different serial devices." >&2
+	echo "EYE-1 and EYE-2 must use different serial devices." >&2
 	exit 2
 fi
 
@@ -49,14 +49,14 @@ flash_image()
 {
 	local device=$1
 	local image=$2
-	local role=$3
+	local eye=$3
 
-	echo "Flashing Role ${role} to ${device}"
+	echo "Flashing EYE-${eye} to ${device}"
 	sha256sum "${image}"
 	esptool --chip esp32s3 --port "${device}" --baud 921600 \
 		write-flash --flash-mode dio --flash-freq 80m --flash-size 8MB \
 		0x0 "${image}"
 }
 
-flash_image "${role_a_device}" "${role_a_image}" A
-flash_image "${role_b_device}" "${role_b_image}" B
+flash_image "${role_a_device}" "${role_a_image}" 1
+flash_image "${role_b_device}" "${role_b_image}" 2

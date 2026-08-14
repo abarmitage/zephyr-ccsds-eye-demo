@@ -167,7 +167,7 @@ static void set_state(enum demo_state next, uint32_t now_ms)
 		break;
 	case DEMO_VERIFYING_STATE:
 		set_activity(false, false);
-		lv_label_set_text(status_label, "VERIFYING TEST OBJECT");
+		lv_label_set_text(status_label, "VERIFYING IMAGE");
 		break;
 	case DEMO_COMPLETE:
 		set_activity(false, false);

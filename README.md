@@ -1,153 +1,78 @@
 # CCSDS EYE demo
 
-This demo turns two ESP32-S3-EYE boards into a pair of small "spacecraft". They
-communicate over Wi-Fi (UDP) at configured IP endpoints and exchange images from the camera
-using CFDP file transfer.
+This demo uses two ESP32-S3-EYE boards to capture and exchange camera images
+over acknowledged CCSDS CFDP carried by Wi-Fi UDP.
 
-## Using the demo
+## Controls
 
-Wait until both displays show `READY / PEER OK`. The labels at the bottom of
-the screen align with the controls on the corresponding side:
+Wait until both displays show `READY / PEER OK`.
 
-- **Upper-left button — SEND:** this board captures one fresh still, keeps it as
-  its latest image, and sends the deterministic test object to the peer.
-- **Lower-left button — REQUEST:** this board sends a `CAPTURE_AND_RETURN`
-  telecommand. The peer captures one fresh still and then sends its
-  deterministic test object back to this board.
-- **Either right-side button — SHOW:** displays the latest valid local capture
-  full-screen. Press either right-side button again to return to the protocol
-  view. Before the first successful capture it reports `NO IMAGE` without
-  changing views.
+- **SEND** (upper-left): capture a fresh image on this board and send it to the
+  other board.
+- **REQUEST** (lower-left): ask the other board to capture a fresh image and
+  send it back.
+- **SHOW** (either right-side button): display the latest valid image, whether
+  it was captured locally or received from the other board. Press again to
+  return to the protocol view.
+
+`SHOW` reports `NO IMAGE` until an image is available. A failed transfer does
+not replace the last valid image.
 
 ![ESP32-S3-EYE button locations and display layout](assets/eye-demo-guide.svg)
 
-In short, 
+## Configure
 
-- **SEND** means **capture here, then send**; 
-- **REQUEST** means **ask the other board to capture, then send**. 
-
-## Configure the two boards
-
-Create local configuration files from the supplied templates:
+Create the local configuration files:
 
 ```sh
-cp conf/site-a.example.conf conf/site-a.conf
-cp conf/site-b.example.conf conf/site-b.conf
+cp conf/eye-1.example.conf conf/eye-1.conf
+cp conf/eye-2.example.conf conf/eye-2.conf
 ```
 
-Edit both files with:
+Set both files to use:
 
-- the same 2.4 GHz WPA2 SSID and password;
-- two known-unused static IPv4 addresses outside the DHCP pool;
-- the LAN netmask and gateway;
-- reciprocal UDP ports: A's local port is B's peer port, and vice versa;
-- reciprocal IPv4 endpoints: A's peer address is B's local address, and vice
-  versa.
+- the same 2.4 GHz WPA2 network;
+- two unused static IPv4 addresses outside the DHCP pool;
+- the correct netmask and gateway;
+- reciprocal peer addresses and UDP ports.
 
-The boards use these fixed settings; they do not use DHCP, mDNS, or broadcast
-discovery. The example addresses are documentation addresses and must be
-replaced. The two site files are ignored by Git to avoid committing Wi-Fi
-credentials.
+The example IP addresses must be replaced. The local configuration files are ignored by Git
+so Wi-Fi credentials are not committed.
 
 ## Build and flash
 
-Build both firmware roles inside the development container:
+Build both roles in the development container:
 
 ```sh
 ./build_both.sh
 ```
 
-The resulting images are available to the host through the bind-mounted
-workspace. Install `esptool` on the host if needed:
-
-```sh
-pipx install esptool
-```
-
-Flash the already-built images from the host (replace the device paths if necessary):
+Flash the built images from the host:
 
 ```sh
 ./flash_both.sh /dev/ttyACM0 /dev/ttyACM1
 ```
 
-Stable `/dev/serial/by-id/...` paths are preferable when available. The first
-device receives the EYE-1 image and the second receives the EYE-2 image. The
-scripts reject missing site files, missing images, and duplicate serial-device
-paths.
+The first device becomes EYE-1 and the second becomes EYE-2. Stable
+`/dev/serial/by-id/...` paths are preferable when available. Install
+`esptool` with `pipx install esptool` if it is not already present.
 
-If the container has reliable access to both serial devices, the combined
-`build_and_flash.sh` script remains available.
-
-## What happens during a transfer
-
-Each board sends a small status packet once per second so that its configured
-peer can become visible. Pressing the upper-left control captures and
-validates one 240 x 240 RGB565 still before starting an acknowledged CFDP
-transfer. Pressing the lower-left control first sends a CCSDS telecommand to
-the peer; acceptance makes the peer run the same capture-first operation before
-the CFDP transfer in the opposite direction (back to the requester)
-
-Capture briefly discards nine frames so the camera's automatic gain adjustments can
-settle, then saves the tenth complete frame.
-Capture failure preserves the previous valid image and does not start CFDP.
-
-The test object is 1,536 bytes and is divided into several CFDP File Data PDUs.
-The receiving board checks its version, declared size, contents, and checksum
-before reporting completion. The thin TX and RX bars show real CFDP byte
-progress copied from the generic module callback and refreshed at a bounded
-cadence. Duplicate or retransmitted data does not inflate the RX bar, recovery
-activity is labelled separately, and 100 percent remains distinct from final
-checksum/Finished completion. A successful exchange ends with `TX DONE` on the
-sender and `RX DONE` on the receiver. Errors and unavailable peers are reported
-on the display.
-
-SHOW changes only the active screen. Peer monitoring, command handling, CFDP
-polling, transfer progress, and timeouts continue while the image fills the
-display. Pressing either left-side control while an image is shown returns to
-the protocol view before queuing that action. Raw press/release diagnostics
-remain visible in the protocol view.
-
-Each UDP datagram carries one bounded, unsegmented CCSDS Space Packet. The IP
-and UDP connection is only the link used to carry the CCSDS packets; peer
-status, telecommands, and CFDP traffic all use CCSDS packet formats.
-
-## Quick check
-
-With both boards showing `READY / PEER OK`:
-
-1. Press the upper-left control on EYE-1. The animation should travel from
-   EYE-1 to EYE-2, followed by successful TX and RX completion.
-2. Press the lower-left control on EYE-1. A short telecommand animation should
-   travel to EYE-2, followed by a file-transfer animation back to EYE-1.
-3. Repeat both actions from EYE-2. The directions should reverse while the
-   board in your hand remains on the left of its own display.
-4. Press either right-side button to show the latest capture, press it again
-   to return, then repeat using the other right-side button.
-
-## Protocol tests
-
-Run the focused native tests inside the development container:
+If the container can access both serial devices directly, build and flash in
+one step:
 
 ```sh
-west build -p always -b native_sim tests -d build-tests
-./build-tests/zephyr/zephyr.exe
+./build_and_flash.sh /dev/ttyACM0 /dev/ttyACM1
 ```
 
-## On-device acceptance checklist
+## Try it
 
-- On each board, complete 50 sequential upper-left captures with stable memory
-  use and no corrupt image or stale display pointer.
-- Trigger capture with the upper-left control on each board and with the
-  lower-left control from each peer.
-- Before any successful capture, press SHOW and confirm `NO IMAGE` remains on
-  the protocol screen.
-- After capture, confirm both right-side buttons show the 240 x 240 image and
-  a second SHOW returns to the unchanged protocol view.
-- From the image view, press both left-side controls separately; confirm the
-  protocol view is restored before the requested operation starts.
-- Force or simulate a camera failure and confirm the prior valid image remains
-  available through SHOW and no placeholder CFDP send begins.
-- Confirm every intended button still logs raw press and release diagnostics
-  over at least 50 presses.
-- While repeatedly capturing and leaving SHOW active, confirm peer presence
-  remains stable and TC, CFDP progress, completion, and timeouts continue.
+1. Press **SEND** on EYE-1. When EYE-2 reports successful reception, press
+   **SHOW** on EYE-2 to see the captured EYE-1 image.
+2. Repeat from EYE-2 to EYE-1.
+3. Press **REQUEST** on EYE-1. EYE-2 captures an image and returns it; use
+   **SHOW** on EYE-1 to view it.
+4. Repeat the request in the opposite direction.
+
+The progress bars show transferred image bytes. Reaching 100 percent means all
+image data has arrived; CFDP checksum and completion confirmation follow as a
+separate final step.

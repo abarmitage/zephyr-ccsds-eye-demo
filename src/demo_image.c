@@ -405,6 +405,22 @@ int demo_image_receiver_write(struct demo_image_receiver *receiver, void *handle
 	return 0;
 }
 
+int demo_image_receiver_read(struct demo_image_receiver *receiver, void *handle, uint32_t offset,
+			     uint8_t *buffer, size_t length, size_t *read_length)
+{
+	size_t available;
+
+	if (receiver == NULL || handle == NULL || buffer == NULL || read_length == NULL ||
+	    !receiver->open || receiver->staging == NULL ||
+	    handle != receiver->staging->object || offset > receiver->extent) {
+		return -EINVAL;
+	}
+	available = receiver->extent - offset;
+	*read_length = MIN(length, available);
+	memcpy(buffer, &((const uint8_t *)receiver->staging->object)[offset], *read_length);
+	return 0;
+}
+
 int demo_image_receiver_close(struct demo_image_receiver *receiver, void *handle)
 {
 	if (receiver == NULL || !receiver->open || receiver->staging == NULL ||

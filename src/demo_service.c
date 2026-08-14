@@ -19,13 +19,13 @@
 #include <zephyr/net/net_mgmt.h>
 #include <zephyr/net/wifi_mgmt.h>
 #include <zephyr/sys/byteorder.h>
+#include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
 
 LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define RX_QUEUE_DEPTH      16u
 #define ROUTER_QUEUE_DEPTH  8u
-#define CFDP_EVENT_QUEUE_DEPTH 24u
 #define ACTION_QUEUE_DEPTH     4u
 #define UI_QUEUE_DEPTH         16u
 #define WORKER_STACK_SIZE      7168u
@@ -36,6 +36,9 @@ LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 #define REQUEST_RETENTION_MS   60000u
 #define SERVICE_POLL_MS        25u
 #define PROGRESS_UI_PERIOD_MS  100u
+#define PRE_CAPTURE_QUIET_PERIOD_MS  250u
+#define POST_CAPTURE_QUIET_PERIOD_MS 250u
+#define CFDP_SEND_PACING_MS           10u
 #define CFDP_FIXED_HEADER_LEN  (4u + (2u * 1u) + 2u)
 #define CFDP_FILE_OFFSET_LEN   4u
 #define CFDP_FILE_PDU_OVERHEAD (CFDP_FIXED_HEADER_LEN + CFDP_FILE_OFFSET_LEN)
@@ -98,10 +101,6 @@ struct network_event_message {
 	enum network_event_type type;
 };
 
-struct cfdp_event_message {
-	ccsds_cfdp_event_t event;
-};
-
 struct send_operation {
 	uint64_t destination_entity_id;
 	enum operation_origin origin;
@@ -117,12 +116,24 @@ struct progress_update {
 	uint64_t next_ui_ms;
 };
 
+struct callback_progress_snapshot {
+	bool pending;
+	bool recovery_activity;
+	uint32_t bytes_transferred;
+	uint32_t file_size;
+};
+
+struct callback_terminal_snapshot {
+	bool pending;
+	ccsds_cfdp_event_t event;
+};
+
 K_MSGQ_DEFINE(rx_queue, sizeof(struct rx_datagram), RX_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(router_queue, sizeof(struct router_message), ROUTER_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(action_queue, sizeof(struct action_message), ACTION_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(network_event_queue, sizeof(struct network_event_message), 2, 4);
-K_MSGQ_DEFINE(cfdp_event_queue, sizeof(struct cfdp_event_message), CFDP_EVENT_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(ui_queue, sizeof(struct demo_ui_event), UI_QUEUE_DEPTH, 4);
+K_SEM_DEFINE(worker_wake, 0, 1);
 K_THREAD_STACK_DEFINE(worker_stack, WORKER_STACK_SIZE);
 
 static struct k_thread worker_thread;
@@ -149,6 +160,10 @@ static bool receiver_wait_logged;
 static uint32_t receiver_retry_logged;
 static struct progress_update tx_progress;
 static struct progress_update rx_progress;
+static struct callback_progress_snapshot callback_progress[2];
+static struct callback_terminal_snapshot callback_terminal[2];
+static struct k_spinlock callback_progress_lock;
+static atomic_t rx_queue_drops;
 static struct demo_image_object image_objects[DEMO_IMAGE_SLOT_COUNT]
 	__attribute__((section(".ext_ram.bss.eye_images"), aligned(32)));
 static struct demo_image_slot image_slots[DEMO_IMAGE_SLOT_COUNT];
@@ -156,6 +171,8 @@ static struct demo_image_store image_store;
 static struct demo_image_source image_source;
 static struct demo_image_receiver image_receiver;
 static struct demo_image_slot *tx_slot;
+
+static void send_peer_status(void);
 static struct k_mutex image_lock;
 static struct demo_camera_adapter camera_adapter;
 static int camera_status;
@@ -275,13 +292,13 @@ static int receive_discard(void *user, const char *path)
 static int receive_read(void *user, void *handle, uint32_t offset, uint8_t *buffer,
 			size_t length, size_t *read_length)
 {
-	ARG_UNUSED(user);
-	ARG_UNUSED(handle);
-	ARG_UNUSED(offset);
-	ARG_UNUSED(buffer);
-	ARG_UNUSED(length);
-	ARG_UNUSED(read_length);
-	return -ENOTSUP;
+	struct demo_image_receiver *receiver = user;
+	int rc;
+
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_receiver_read(receiver, handle, offset, buffer, length, read_length);
+	k_mutex_unlock(&image_lock);
+	return rc;
 }
 
 static int receive_close(void *user, void *handle)
@@ -377,6 +394,7 @@ static int peer_status_router_handler(const struct ccsds_space_packet *packet, v
 static int udp_receive(void *user, const uint8_t *unit, size_t length)
 {
 	struct rx_datagram datagram;
+	int rc;
 
 	ARG_UNUSED(user);
 	if (length == 0u || length > sizeof(datagram.data)) {
@@ -384,15 +402,69 @@ static int udp_receive(void *user, const uint8_t *unit, size_t length)
 	}
 	datagram.length = length;
 	memcpy(datagram.data, unit, length);
-	return k_msgq_put(&rx_queue, &datagram, K_NO_WAIT);
+	rc = k_msgq_put(&rx_queue, &datagram, K_NO_WAIT);
+	if (rc == 0) {
+		k_sem_give(&worker_wake);
+	} else {
+		atomic_inc(&rx_queue_drops);
+	}
+	return rc;
 }
 
 static void cfdp_event_callback(void *user, const ccsds_cfdp_event_t *event)
 {
-	const struct cfdp_event_message message = {.event = *event};
+	const bool progress_event = event->type == CCSDS_CFDP_EVENT_TRANSACTION_STARTED ||
+				    event->type == CCSDS_CFDP_EVENT_FILE_SEGMENT_SENT ||
+				    event->type == CCSDS_CFDP_EVENT_FILE_SEGMENT_RECV ||
+				    event->type == CCSDS_CFDP_EVENT_NAK_SENT ||
+				    event->type == CCSDS_CFDP_EVENT_NAK_RECV ||
+				    event->type == CCSDS_CFDP_EVENT_RETRANSMIT;
 
 	ARG_UNUSED(user);
-	(void)k_msgq_put(&cfdp_event_queue, &message, K_NO_WAIT);
+	if (progress_event) {
+		const size_t index = event->direction == CCSDS_CFDP_DIRECTION_SENDER ? 0u : 1u;
+		k_spinlock_key_t key = k_spin_lock(&callback_progress_lock);
+
+		callback_progress[index].bytes_transferred = event->bytes_transferred;
+		callback_progress[index].file_size = event->file_size;
+		callback_progress[index].recovery_activity |=
+			event->phase == CCSDS_CFDP_PHASE_RECOVERY;
+		callback_progress[index].pending = true;
+		k_spin_unlock(&callback_progress_lock, key);
+		k_sem_give(&worker_wake);
+		return;
+	}
+	if (event->type == CCSDS_CFDP_EVENT_COMPLETE ||
+	    event->type == CCSDS_CFDP_EVENT_FAILED) {
+		const size_t index = event->direction == CCSDS_CFDP_DIRECTION_SENDER ? 0u : 1u;
+		k_spinlock_key_t key = k_spin_lock(&callback_progress_lock);
+
+		/* Keep the first terminal event until the worker consumes it.  It owns
+		 * application cleanup and must never be displaced by later traffic.
+		 */
+		if (!callback_terminal[index].pending) {
+			callback_terminal[index].event = *event;
+			callback_terminal[index].pending = true;
+		}
+		k_spin_unlock(&callback_progress_lock, key);
+		k_sem_give(&worker_wake);
+	}
+}
+
+static int send_cfdp_packet(void *user, const uint8_t *packet, size_t length)
+{
+	int rc = ccsds_udp_send(user, packet, length);
+
+	if (rc == 0) {
+		uint64_t now = (uint64_t)k_uptime_get();
+
+		if (now >= next_status_ms) {
+			send_peer_status();
+			next_status_ms = now + STATUS_PERIOD_MS;
+		}
+		k_sleep(K_MSEC(CFDP_SEND_PACING_MS));
+	}
+	return rc;
 }
 
 static int send_space_packet(uint16_t apid, enum ccsds_packet_type type, const uint8_t *payload,
@@ -486,13 +558,21 @@ static int start_send_operation(const struct send_operation *operation)
 	active_operation = *operation;
 	operation_active = true;
 	ui_event(DEMO_UI_CAPTURING, operation->request_id, 0);
+	k_sleep(K_MSEC(PRE_CAPTURE_QUIET_PERIOD_MS));
 	k_mutex_lock(&image_lock, K_FOREVER);
 	rc = demo_image_store_claim_staging(&image_store, &staging);
+	if (rc != 0) {
+		LOG_ERR("image staging claim failed: %d owners=%02x,%02x,%02x", rc,
+			image_slots[0].owners, image_slots[1].owners, image_slots[2].owners);
+	}
 	k_mutex_unlock(&image_lock);
 	if (rc == 0) {
 		rc = camera_status != 0
 			     ? camera_status
 			     : demo_camera_acquire_object(&camera_adapter, staging->object);
+		if (rc != 0) {
+			LOG_ERR("camera acquisition failed: %d", rc);
+		}
 	}
 	if (rc != 0) {
 		if (staging != NULL) {
@@ -502,7 +582,6 @@ static int start_send_operation(const struct send_operation *operation)
 		}
 		operation_active = false;
 		ui_event(DEMO_UI_FAILED, operation->request_id, rc);
-		LOG_ERR("camera acquisition failed: %d", rc);
 		return rc;
 	}
 	k_mutex_lock(&image_lock, K_FOREVER);
@@ -526,6 +605,7 @@ static int start_send_operation(const struct send_operation *operation)
 		return rc;
 	}
 	LOG_INF("local image ready request=%u", operation->request_id);
+	k_sleep(K_MSEC(POST_CAPTURE_QUIET_PERIOD_MS));
 	outgoing_active = true;
 	ui_event(DEMO_UI_CFDP_TX, operation->request_id, 0);
 	status =
@@ -650,6 +730,7 @@ static void process_router_messages(uint64_t now)
 				header_length < message.length &&
 				message.payload[header_length] == CCSDS_CFDP_DIRECTIVE_METADATA;
 			if (!cfdp_service.entity.receiver.active && starts_receive) {
+				atomic_set(&rx_queue_drops, 0);
 				ui_event(DEMO_UI_CFDP_RX, 0u, 0);
 			}
 			status = ccsds_cfdp_entity_receive_pdu(&cfdp_service.entity, &receive_ops,
@@ -687,55 +768,87 @@ static void flush_progress(struct progress_update *progress, enum demo_transfer_
 	progress->next_ui_ms = now + PROGRESS_UI_PERIOD_MS;
 }
 
+static void process_progress_snapshots(uint64_t now)
+{
+	struct callback_progress_snapshot snapshots[ARRAY_SIZE(callback_progress)];
+	k_spinlock_key_t key = k_spin_lock(&callback_progress_lock);
+
+	memcpy(snapshots, callback_progress, sizeof(snapshots));
+	for (size_t i = 0; i < ARRAY_SIZE(callback_progress); ++i) {
+		callback_progress[i].pending = false;
+		callback_progress[i].recovery_activity = false;
+	}
+	k_spin_unlock(&callback_progress_lock, key);
+
+	for (size_t i = 0; i < ARRAY_SIZE(snapshots); ++i) {
+		struct progress_update *progress = i == 0u ? &tx_progress : &rx_progress;
+		enum demo_transfer_direction direction =
+			i == 0u ? DEMO_TRANSFER_TX : DEMO_TRANSFER_RX;
+
+		if (!snapshots[i].pending) {
+			continue;
+		}
+		progress->bytes_transferred = snapshots[i].bytes_transferred;
+		progress->file_size = snapshots[i].file_size;
+		progress->recovery_activity = snapshots[i].recovery_activity;
+		progress->pending = true;
+		flush_progress(progress, direction, now, false);
+	}
+}
+
 static void process_cfdp_events(uint64_t now)
 {
-	struct cfdp_event_message message;
+	struct callback_terminal_snapshot snapshots[ARRAY_SIZE(callback_terminal)];
+	k_spinlock_key_t key;
 
-	while (k_msgq_get(&cfdp_event_queue, &message, K_NO_WAIT) == 0) {
-		struct progress_update *progress =
-			message.event.direction == CCSDS_CFDP_DIRECTION_SENDER ? &tx_progress
-									       : &rx_progress;
-		enum demo_transfer_direction direction =
-			message.event.direction == CCSDS_CFDP_DIRECTION_SENDER ? DEMO_TRANSFER_TX
-									       : DEMO_TRANSFER_RX;
+	process_progress_snapshots(now);
+	key = k_spin_lock(&callback_progress_lock);
+	memcpy(snapshots, callback_terminal, sizeof(snapshots));
+	for (size_t i = 0; i < ARRAY_SIZE(callback_terminal); ++i) {
+		callback_terminal[i].pending = false;
+	}
+	k_spin_unlock(&callback_progress_lock, key);
 
-		if (message.event.type == CCSDS_CFDP_EVENT_TRANSACTION_STARTED ||
-		    message.event.type == CCSDS_CFDP_EVENT_FILE_SEGMENT_SENT ||
-		    message.event.type == CCSDS_CFDP_EVENT_FILE_SEGMENT_RECV ||
-		    message.event.type == CCSDS_CFDP_EVENT_NAK_SENT ||
-		    message.event.type == CCSDS_CFDP_EVENT_NAK_RECV ||
-		    message.event.type == CCSDS_CFDP_EVENT_RETRANSMIT) {
-			progress->bytes_transferred = message.event.bytes_transferred;
-			progress->file_size = message.event.file_size;
-			progress->recovery_activity =
-				message.event.phase == CCSDS_CFDP_PHASE_RECOVERY;
-			progress->pending = true;
-			flush_progress(progress, direction, now, false);
+	for (size_t i = 0; i < ARRAY_SIZE(snapshots); ++i) {
+		if (!snapshots[i].pending) {
+			continue;
 		}
+		const ccsds_cfdp_event_t *event = &snapshots[i].event;
+		struct progress_update *progress =
+			event->direction == CCSDS_CFDP_DIRECTION_SENDER ? &tx_progress : &rx_progress;
+		enum demo_transfer_direction direction =
+			event->direction == CCSDS_CFDP_DIRECTION_SENDER ? DEMO_TRANSFER_TX
+								       : DEMO_TRANSFER_RX;
 
-		if (message.event.type == CCSDS_CFDP_EVENT_COMPLETE ||
-		    message.event.type == CCSDS_CFDP_EVENT_FAILED) {
-			bool sender = message.event.direction == CCSDS_CFDP_DIRECTION_SENDER;
-			bool success = message.event.type == CCSDS_CFDP_EVENT_COMPLETE &&
-				       message.event.status == CCSDS_CFDP_STATUS_OK;
+		{
+			bool sender = event->direction == CCSDS_CFDP_DIRECTION_SENDER;
+			bool success = event->type == CCSDS_CFDP_EVENT_COMPLETE &&
+				       event->status == CCSDS_CFDP_STATUS_OK;
 			uint32_t request_id = sender ? active_operation.request_id : 0u;
 
-			progress->bytes_transferred = message.event.bytes_transferred;
-			progress->file_size = message.event.file_size;
+			progress->bytes_transferred = event->bytes_transferred;
+			progress->file_size = event->file_size;
 			progress->recovery_activity = false;
 			progress->pending = true;
 			flush_progress(progress, direction, now, true);
 
 			if (sender) {
+				int release_rc = 0;
+
 				k_mutex_lock(&image_lock, K_FOREVER);
 				if (tx_slot != NULL) {
 					__ASSERT_NO_MSG(!image_source.open);
 					demo_image_source_unbind(&image_source);
-					__ASSERT_NO_MSG(demo_image_store_release_tx(
-							&image_store, tx_slot) == 0);
-					tx_slot = NULL;
+					release_rc = demo_image_store_release_tx(&image_store, tx_slot);
+					__ASSERT_NO_MSG(release_rc == 0);
+					if (release_rc == 0) {
+						tx_slot = NULL;
+					}
 				}
 				k_mutex_unlock(&image_lock);
+				if (release_rc != 0) {
+					LOG_ERR("CFDP TX image release failed: %d", release_rc);
+				}
 			} else {
 				int image_rc;
 
@@ -745,12 +858,15 @@ static void process_cfdp_events(uint64_t now)
 				success = success && image_rc == 0;
 			}
 			LOG_INF("CFDP %s terminal event=%u status=%d transaction=%llu:%llu",
-				sender ? "TX" : "RX", message.event.type, message.event.status,
-				(unsigned long long)message.event.transaction_id.source_entity_id,
+				sender ? "TX" : "RX", event->type, event->status,
+				(unsigned long long)event->transaction_id.source_entity_id,
 				(unsigned long long)
-					message.event.transaction_id.transaction_sequence_number);
+					event->transaction_id.transaction_sequence_number);
+			if (!sender) {
+				LOG_INF("CFDP RX ingress queue drops=%ld", atomic_get(&rx_queue_drops));
+			}
 			if (sender && active_operation.has_request_id && !success &&
-			    message.event.status == CCSDS_CFDP_STATUS_INACTIVITY_DETECTED) {
+			    event->status == CCSDS_CFDP_STATUS_INACTIVITY_DETECTED) {
 				send_command_status(active_operation.request_id,
 						    DEMO_COMMAND_TIMED_OUT);
 			}
@@ -859,7 +975,7 @@ static int initialize_protocol(void)
 		.local_apid = CONFIG_EYE_DEMO_CFDP_APID,
 		.remote_apid = CONFIG_EYE_DEMO_CFDP_APID,
 		.packet_type = CCSDS_PACKET_TYPE_TC,
-		.send_packet = ccsds_udp_send,
+		.send_packet = send_cfdp_packet,
 		.send_user = &udp,
 		.now_ms = now_ms,
 		.receive_filestore = &receive_ops,
@@ -898,7 +1014,9 @@ static void wifi_event_handler(struct net_mgmt_event_callback *callback, uint64_
 		event == NET_EVENT_WIFI_CONNECT_RESULT && status != NULL && status->status == 0
 			? NETWORK_ASSOCIATED
 			: NETWORK_DISCONNECTED;
-	(void)k_msgq_put(&network_event_queue, &message, K_NO_WAIT);
+	if (k_msgq_put(&network_event_queue, &message, K_NO_WAIT) == 0) {
+		k_sem_give(&worker_wake);
+	}
 }
 
 static void worker(void *p1, void *p2, void *p3)
@@ -982,7 +1100,7 @@ static void worker(void *p1, void *p2, void *p3)
 				pending_request_deadline_ms = 0u;
 			}
 		}
-		k_sleep(K_MSEC(SERVICE_POLL_MS));
+		(void)k_sem_take(&worker_wake, K_MSEC(SERVICE_POLL_MS));
 	}
 }
 
@@ -1009,15 +1127,23 @@ int demo_service_start(void)
 bool demo_service_queue_local_send(void)
 {
 	const struct action_message action = {.type = ACTION_LOCAL_SEND};
+	int rc = k_msgq_put(&action_queue, &action, K_NO_WAIT);
 
-	return k_msgq_put(&action_queue, &action, K_NO_WAIT) == 0;
+	if (rc == 0) {
+		k_sem_give(&worker_wake);
+	}
+	return rc == 0;
 }
 
 bool demo_service_queue_remote_request(void)
 {
 	const struct action_message action = {.type = ACTION_REMOTE_REQUEST};
+	int rc = k_msgq_put(&action_queue, &action, K_NO_WAIT);
 
-	return k_msgq_put(&action_queue, &action, K_NO_WAIT) == 0;
+	if (rc == 0) {
+		k_sem_give(&worker_wake);
+	}
+	return rc == 0;
 }
 
 bool demo_service_get_ui_event(struct demo_ui_event *event)
