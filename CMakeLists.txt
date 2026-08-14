@@ -8,5 +8,8 @@ target_sources(app PRIVATE
     src/main.c
     src/demo_ui.c
     src/demo_protocol.c
+    src/demo_image.c
+    src/demo_view.c
+    src/demo_camera.c
     src/demo_service.c
 )

@@ -69,9 +69,8 @@ configuration errors are visible without a debugger.
 
 ## UI Baseline
 
-Keep the presentation deliberately small:
+Keep the normal protocol presentation deliberately small:
 
-- main region: last captured or last verified received image;
 - top strip: local spacecraft on the left, remote spacecraft on the right,
   their callsigns, stable EYE-1 cyan/EYE-2 orange identity colors, and
   persistent `CFDP`; position conveys local/peer perspective without literal
@@ -83,10 +82,40 @@ Keep the presentation deliberately small:
 - CFDP image data: cyan packet activity returning or leaving;
 - terminal state: checksum result and a check or error icon.
 
+A separate image view shows the latest valid local capture or verified
+received image full-screen, with no protocol animation, thumbnail, or status
+overlay.
+
 The UI state model must cover boot, peer unavailable, idle, capturing, TC
 request, transmitting, receiving, duplex transfer, verifying, complete,
-busy, timeout, and failed. Animation may visualize sampled activity, but byte
-progress and protocol state must come from real callbacks.
+busy, timeout, failed, and full-screen image display. Animation may visualize
+sampled activity, but byte progress and protocol state must come from real
+callbacks. Switching to image view changes presentation only; networking,
+CFDP, peer monitoring, command handling, and timeouts continue to run.
+
+## Final Button And Image Interaction
+
+Keep the camera workflow deliberately direct:
+
+- button A captures one fresh still and sends that capture to the configured
+  peer with acknowledged CFDP;
+- button B sends `CAPTURE_AND_RETURN`; an accepting peer captures one fresh
+  still and returns it through the same capture and send operations;
+- the reliable right-side button, or both right-side buttons as aliases when
+  both are usable, toggles `SHOW`;
+- `SHOW` replaces the protocol view with the latest valid image at full-screen;
+  pressing `SHOW` again returns to the unchanged protocol view;
+- pressing A or B from image view returns to the protocol view before starting
+  the requested operation;
+- `SHOW` with no valid image reports `NO IMAGE` without leaving the protocol
+  view.
+
+There is one logical latest valid image. A successful local capture may become
+latest immediately. Incoming data may become latest only after CFDP and image
+object verification complete. Separate bounded transmit, receive-staging, and
+display ownership may still be required internally so camera capture, LVGL,
+and acknowledged retransmission cannot overwrite one another. Failure must
+preserve the previous valid image.
 
 ## Milestone 1: On-Device Usability Proof
 
@@ -101,8 +130,9 @@ camera or CFDP data transfer.
 - Implement the final UI layout and state model using scripted demo events.
 - Show single-direction and duplex packet animations using synthetic progress.
 - Add an input diagnostic view that displays every raw Zephyr input event.
-- Determine which BOOT/ADC keys are reliably detected and map two suitable
-  physical buttons to capture/send and remote capture.
+- Determine which BOOT/ADC keys are reliably detected. Map A to capture/send,
+  B to remote capture, and the reliable right-side key (or both as aliases) to
+  SHOW.
 - Show role, CFDP entity, IP configuration state, and peer state on screen.
 
 ### Acceptance
@@ -223,9 +253,13 @@ own queue.
 
 - Start from Zephyr's supported ESP32-S3-EYE video configuration.
 - Allocate camera buffers in PSRAM and capture one 240 x 240 RGB565 still.
+- Do not add a live viewfinder: each acquisition captures exactly one fresh
+  frame when requested.
 - Define buffer ownership across camera capture, LVGL display, CFDP sender
   retention, and retransmission.
-- Display the captured still through the real UI.
+- Add the separate full-screen `SHOW` view. It displays the latest valid image
+  and toggles back to the existing protocol UI without pausing protocol work.
+- Preserve the previous valid image if a later capture fails.
 - Add camera capture as the acquisition phase of the shared operation proven
   in Milestone 2. Validate that phase locally before replacing the CFDP test
   object with the captured image.
@@ -236,6 +270,9 @@ own queue.
 
 - Fifty sequential captures succeed on each board without memory growth,
   corrupt frames, or stale LVGL pointers.
+- `SHOW`, a second `SHOW`, and A/B from image view produce the specified view
+  transitions without affecting network or protocol state.
+- `SHOW` before the first valid image reports `NO IMAGE`.
 - Wi-Fi peer presence remains stable while capture and display are active.
 - Capture failure is visible and returns both actions to a valid state.
 
@@ -251,6 +288,8 @@ own queue.
 - Feed real progress events into the existing UI state model.
 - Retain the previous image until size and checksum verification succeeds,
   then swap the displayed receive buffer atomically.
+- Keep the CFDP sender's captured object immutable until its terminal event;
+  showing an image must not change sender or receiver buffer ownership.
 - Record data duration, acknowledged completion duration, UDP drops, NAKs,
   retransmitted bytes, and UI update latency.
 
@@ -266,16 +305,22 @@ own queue.
 
 Connect the proven slices:
 
-- button A: capture, preview, CFDP transmit, verified peer display;
+- button A: capture one fresh still, retain it as the latest valid image, and
+  transmit that same immutable object;
 - button B: TC request, peer capture, CFDP return, verified local display.
+- `SHOW`: toggle between the existing protocol UI and the latest valid image;
+  no capture, transfer, or confirmation is implied by this action.
 
 Queue camera and CFDP work outside network and UI callbacks. Define bounded
-busy behavior for repeated local actions and duplicate TC request IDs.
+busy behavior for repeated local actions and duplicate TC request IDs. SHOW
+remains a UI-only operation and must not synchronously enter camera or CFDP.
 
 ### Acceptance
 
 - A new user can execute both workflows using only the two displays and
   physical buttons.
+- Either board can inspect its latest local or verified received image and
+  return to the protocol UI without changing transfer state.
 - Both boards show the correct direction, actual progress, verification, and
   error recovery.
 - Twenty alternating operations complete without reboot or manual cleanup.
@@ -319,7 +364,8 @@ validation plan. Do not mix it into the initial usability milestones.
 ## Verification Strategy
 
 - Host tests for the UI state reducer, TC payload codec, request deduplication,
-  image header, and memory filestore.
+  image header, memory filestore, SHOW toggling, no-image handling, and A/B
+  transitions from image view.
 - `zephyr-ccsds` unit tests for the progress callback contract.
 - Native or simulated UI runs with scripted state sequences where practical.
 - Compile verification for both EYE role configurations.
@@ -334,6 +380,7 @@ validation plan. Do not mix it into the initial usability milestones.
 - Claiming RF, transfer-frame, COP-1, SDLS, or channel-coding behavior when the
   selected bearer is packet-over-UDP.
 - Continuous camera preview or video streaming.
+- Image thumbnails or protocol/status overlays on the full-screen image view.
 - JPEG decoding, persistent photo archives, discovery protocols, or dynamic
   multi-peer routing.
 - More than one active CFDP sender and one active receiver per device.

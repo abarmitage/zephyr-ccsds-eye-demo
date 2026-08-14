@@ -52,6 +52,7 @@ flash_image()
 	local role=$3
 
 	echo "Flashing Role ${role} to ${device}"
+	sha256sum "${image}"
 	esptool --chip esp32s3 --port "${device}" --baud 921600 \
 		write-flash --flash-mode dio --flash-freq 80m --flash-size 8MB \
 		0x0 "${image}"

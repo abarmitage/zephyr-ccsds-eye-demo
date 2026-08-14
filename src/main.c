@@ -46,7 +46,6 @@ int main(void)
 		LOG_ERR("display is not ready");
 		return 0;
 	}
-
 	demo_ui_init();
 	(void)lv_timer_handler();
 	(void)display_blanking_off(display);
@@ -61,17 +60,34 @@ int main(void)
 			LOG_INF("input code=%u value=%d", key.code, key.value);
 			demo_ui_handle_key(key.code, key.value);
 			if (key.value != 0 && key.code == INPUT_KEY_MENU) {
-				(void)demo_service_queue_local_send();
+				demo_ui_prepare_action();
+				if (!demo_service_queue_local_send()) {
+					demo_ui_report_busy();
+				}
 			} else if (key.value != 0 && key.code == INPUT_KEY_PLAY) {
-				(void)demo_service_queue_remote_request();
+				demo_ui_prepare_action();
+				if (!demo_service_queue_remote_request()) {
+					demo_ui_report_busy();
+				}
+			} else if (key.value != 0 &&
+				   (key.code == INPUT_KEY_UP || key.code == INPUT_KEY_DOWN)) {
+				demo_ui_toggle_show();
 			}
 		}
 		while (demo_service_get_ui_event(&ui_event)) {
 			demo_ui_handle_event(&ui_event);
 		}
 
-		demo_ui_tick(k_uptime_get_32());
-		(void)lv_timer_handler();
+		if (demo_ui_image_active()) {
+			int rc = demo_ui_render_image(display);
+
+			if (rc != 0) {
+				LOG_ERR("image display failed: %d", rc);
+			}
+		} else {
+			demo_ui_tick(k_uptime_get_32());
+			(void)lv_timer_handler();
+		}
 		k_sleep(K_MSEC(10));
 	}
 

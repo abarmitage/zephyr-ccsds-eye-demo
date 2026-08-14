@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: Apache-2.0 */
 
 #include "demo_service.h"
+#include "demo_camera.h"
 
 #include <errno.h>
 #include <string.h>
@@ -22,26 +23,25 @@
 
 LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 
-#define CFDP_FILE_PDU_COUNT \
-	DIV_ROUND_UP(DEMO_TEST_OBJECT_SIZE, CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE)
+#define CFDP_FILE_PDU_COUNT DIV_ROUND_UP(DEMO_TEST_OBJECT_SIZE, CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE)
 /* One synchronous send emits metadata, every File Data PDU, and EOF as a burst.
  * Leave room for the command response and periodic/control traffic as well.
  */
-#define RX_QUEUE_DEPTH (CFDP_FILE_PDU_COUNT + 6u)
-#define ROUTER_QUEUE_DEPTH 8u
+#define RX_QUEUE_DEPTH      (CFDP_FILE_PDU_COUNT + 6u)
+#define ROUTER_QUEUE_DEPTH  8u
 #define CFDP_EVENT_QUEUE_DEPTH 24u
-#define ACTION_QUEUE_DEPTH 4u
-#define UI_QUEUE_DEPTH 16u
-#define WORKER_STACK_SIZE 7168u
-#define WORKER_PRIORITY 10
-#define STATUS_PERIOD_MS 1000u
-#define PEER_TIMEOUT_MS 3500u
-#define COMMAND_TIMEOUT_MS 5000u
-#define REQUEST_RETENTION_MS 60000u
-#define SERVICE_POLL_MS 25u
-#define PROGRESS_UI_PERIOD_MS 100u
-#define TEST_SOURCE_NAME "eye-test-v1.bin"
-#define TEST_DEST_NAME "eye-received-v1.bin"
+#define ACTION_QUEUE_DEPTH     4u
+#define UI_QUEUE_DEPTH         16u
+#define WORKER_STACK_SIZE      7168u
+#define WORKER_PRIORITY        10
+#define STATUS_PERIOD_MS       1000u
+#define PEER_TIMEOUT_MS        3500u
+#define COMMAND_TIMEOUT_MS     5000u
+#define REQUEST_RETENTION_MS   60000u
+#define SERVICE_POLL_MS        25u
+#define PROGRESS_UI_PERIOD_MS  100u
+#define TEST_SOURCE_NAME       "eye-test-v1.bin"
+#define TEST_DEST_NAME         "eye-received-v1.bin"
 
 BUILD_ASSERT(CONFIG_CCSDS_UDP_MAX_UNIT_LEN <= 1280,
 	     "UDP unit must remain below a conservative non-fragmenting IPv4 payload");
@@ -122,8 +122,7 @@ K_MSGQ_DEFINE(rx_queue, sizeof(struct rx_datagram), RX_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(router_queue, sizeof(struct router_message), ROUTER_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(action_queue, sizeof(struct action_message), ACTION_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(network_event_queue, sizeof(struct network_event_message), 2, 4);
-K_MSGQ_DEFINE(cfdp_event_queue, sizeof(struct cfdp_event_message),
-	      CFDP_EVENT_QUEUE_DEPTH, 4);
+K_MSGQ_DEFINE(cfdp_event_queue, sizeof(struct cfdp_event_message), CFDP_EVENT_QUEUE_DEPTH, 4);
 K_MSGQ_DEFINE(ui_queue, sizeof(struct demo_ui_event), UI_QUEUE_DEPTH, 4);
 K_THREAD_STACK_DEFINE(worker_stack, WORKER_STACK_SIZE);
 
@@ -153,6 +152,13 @@ static bool receiver_wait_logged;
 static uint32_t receiver_retry_logged;
 static struct progress_update tx_progress;
 static struct progress_update rx_progress;
+static struct demo_image_object image_objects[DEMO_IMAGE_SLOT_COUNT]
+	__attribute__((section(".ext_ram.bss.eye_images"), aligned(32)));
+static struct demo_image_slot image_slots[DEMO_IMAGE_SLOT_COUNT];
+static struct demo_image_store image_store;
+static struct k_mutex image_lock;
+static struct demo_camera_adapter camera_adapter;
+static int camera_status;
 
 static void ui_event(enum demo_ui_event_type type, uint32_t request_id, int32_t detail)
 {
@@ -198,8 +204,8 @@ static int source_open_read(void *user, const char *path, void **handle, uint32_
 	return 0;
 }
 
-static int object_read(void *user, void *handle, uint32_t offset, uint8_t *buffer,
-		       size_t length, size_t *read_length)
+static int object_read(void *user, void *handle, uint32_t offset, uint8_t *buffer, size_t length,
+		       size_t *read_length)
 {
 	struct memory_object *object = handle;
 	size_t available;
@@ -239,8 +245,8 @@ static int receive_open_write(void *user, const char *path, void **handle)
 	return 0;
 }
 
-static int receive_write(void *user, void *handle, uint32_t offset,
-			 const uint8_t *buffer, size_t length)
+static int receive_write(void *user, void *handle, uint32_t offset, const uint8_t *buffer,
+			 size_t length)
 {
 	struct memory_object *object = handle;
 	size_t end = (size_t)offset + length;
@@ -293,8 +299,8 @@ static const ccsds_cfdp_filestore_ops_t receive_ops = {
 	.discard_tmp = receive_discard,
 };
 
-static int queue_router_message(enum router_message_type type,
-				const uint8_t *payload, size_t length)
+static int queue_router_message(enum router_message_type type, const uint8_t *payload,
+				size_t length)
 {
 	struct router_message message;
 
@@ -314,10 +320,10 @@ static int cfdp_router_handler(const struct ccsds_space_packet *packet, void *us
 
 	ARG_UNUSED(user_data);
 	if (packet == NULL || packet->version != 0u || packet->secondary_header ||
-	    packet->sequence_flags != CCSDS_SEQUENCE_UNSEGMENTED ||
-	    packet->payload_len == 0u || packet->payload_len > CCSDS_CFDP_MAX_PDU_SIZE ||
-	    ccsds_cfdp_decode_header(packet->payload, packet->payload_len, &header,
-				     &consumed) != CCSDS_CFDP_STATUS_OK) {
+	    packet->sequence_flags != CCSDS_SEQUENCE_UNSEGMENTED || packet->payload_len == 0u ||
+	    packet->payload_len > CCSDS_CFDP_MAX_PDU_SIZE ||
+	    ccsds_cfdp_decode_header(packet->payload, packet->payload_len, &header, &consumed) !=
+		    CCSDS_CFDP_STATUS_OK) {
 		return -EINVAL;
 	}
 	return queue_router_message(ROUTER_CFDP, packet->payload, packet->payload_len);
@@ -326,17 +332,14 @@ static int cfdp_router_handler(const struct ccsds_space_packet *packet, void *us
 static int command_router_handler(const struct ccsds_space_packet *packet, void *user_data)
 {
 	ARG_UNUSED(user_data);
-	if (packet == NULL || packet->type != CCSDS_PACKET_TYPE_TC ||
-	    packet->payload == NULL || packet->payload_len == 0u ||
-	    packet->payload_len > CCSDS_CFDP_MAX_PDU_SIZE) {
+	if (packet == NULL || packet->type != CCSDS_PACKET_TYPE_TC || packet->payload == NULL ||
+	    packet->payload_len == 0u || packet->payload_len > CCSDS_CFDP_MAX_PDU_SIZE) {
 		return -EINVAL;
 	}
-	return queue_router_message(ROUTER_CAPTURE_COMMAND, packet->payload,
-				    packet->payload_len);
+	return queue_router_message(ROUTER_CAPTURE_COMMAND, packet->payload, packet->payload_len);
 }
 
-static int command_status_router_handler(const struct ccsds_space_packet *packet,
-					 void *user_data)
+static int command_status_router_handler(const struct ccsds_space_packet *packet, void *user_data)
 {
 	struct demo_command_status status;
 
@@ -345,20 +348,17 @@ static int command_status_router_handler(const struct ccsds_space_packet *packet
 	    demo_command_status_decode(packet->payload, packet->payload_len, &status) != 0) {
 		return -EINVAL;
 	}
-	return queue_router_message(ROUTER_COMMAND_STATUS, packet->payload,
-				    packet->payload_len);
+	return queue_router_message(ROUTER_COMMAND_STATUS, packet->payload, packet->payload_len);
 }
 
-static int peer_status_router_handler(const struct ccsds_space_packet *packet,
-				      void *user_data)
+static int peer_status_router_handler(const struct ccsds_space_packet *packet, void *user_data)
 {
 	ARG_UNUSED(user_data);
-	if (packet == NULL || packet->type != CCSDS_PACKET_TYPE_TM ||
-	    packet->payload == NULL || packet->payload_len != DEMO_PEER_STATUS_LEN) {
+	if (packet == NULL || packet->type != CCSDS_PACKET_TYPE_TM || packet->payload == NULL ||
+	    packet->payload_len != DEMO_PEER_STATUS_LEN) {
 		return -EINVAL;
 	}
-	return queue_router_message(ROUTER_PEER_STATUS, packet->payload,
-				    packet->payload_len);
+	return queue_router_message(ROUTER_PEER_STATUS, packet->payload, packet->payload_len);
 }
 
 static int udp_receive(void *user, const uint8_t *unit, size_t length)
@@ -382,8 +382,8 @@ static void cfdp_event_callback(void *user, const ccsds_cfdp_event_t *event)
 	(void)k_msgq_put(&cfdp_event_queue, &message, K_NO_WAIT);
 }
 
-static int send_space_packet(uint16_t apid, enum ccsds_packet_type type,
-			     const uint8_t *payload, size_t payload_length)
+static int send_space_packet(uint16_t apid, enum ccsds_packet_type type, const uint8_t *payload,
+			     size_t payload_length)
 {
 	uint8_t buffer[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + DEMO_PEER_STATUS_LEN];
 	size_t length;
@@ -431,8 +431,8 @@ static void send_peer_status(void)
 	(void)configured_ipv4(CONFIG_EYE_DEMO_PEER_IPV4, &status.peer_ipv4);
 	strncpy(status.callsign, CONFIG_EYE_DEMO_CALLSIGN, sizeof(status.callsign));
 	if (demo_peer_status_encode(&status, payload, sizeof(payload)) > 0) {
-		(void)send_space_packet(CONFIG_EYE_DEMO_PEER_STATUS_APID,
-					CCSDS_PACKET_TYPE_TM, payload, sizeof(payload));
+		(void)send_space_packet(CONFIG_EYE_DEMO_PEER_STATUS_APID, CCSDS_PACKET_TYPE_TM,
+					payload, sizeof(payload));
 	}
 }
 
@@ -447,13 +447,14 @@ static void send_command_status(uint32_t request_id, enum demo_command_result re
 	int length = demo_command_status_encode(&status, payload, sizeof(payload));
 
 	if (length > 0) {
-		(void)send_space_packet(CONFIG_EYE_DEMO_COMMAND_STATUS_APID,
-					CCSDS_PACKET_TYPE_TM, payload, (size_t)length);
+		(void)send_space_packet(CONFIG_EYE_DEMO_COMMAND_STATUS_APID, CCSDS_PACKET_TYPE_TM,
+					payload, (size_t)length);
 	}
 }
 
-static bool start_send_operation(const struct send_operation *operation)
+static int start_send_operation(const struct send_operation *operation)
 {
+	struct demo_image_slot *staging = NULL;
 	ccsds_cfdp_transaction_id_t transaction_id;
 	const ccsds_cfdp_put_request_t request = {
 		.source_path = TEST_SOURCE_NAME,
@@ -463,24 +464,54 @@ static bool start_send_operation(const struct send_operation *operation)
 		.acknowledged_mode = true,
 	};
 	enum ccsds_cfdp_status status;
+	int rc;
 
 	if (!protocol_ready || !peer_ready || operation_active ||
 	    operation->destination_entity_id != CONFIG_EYE_DEMO_PEER_ENTITY_ID) {
-		return false;
+		return -EBUSY;
 	}
 	active_operation = *operation;
 	operation_active = true;
+	ui_event(DEMO_UI_CAPTURING, operation->request_id, 0);
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_store_claim_staging(&image_store, &staging);
+	k_mutex_unlock(&image_lock);
+	if (rc == 0) {
+		rc = camera_status != 0
+			     ? camera_status
+			     : demo_camera_acquire_object(&camera_adapter, staging->object);
+	}
+	if (rc != 0) {
+		if (staging != NULL) {
+			k_mutex_lock(&image_lock, K_FOREVER);
+			(void)demo_image_store_abort_staging(&image_store, staging);
+			k_mutex_unlock(&image_lock);
+		}
+		operation_active = false;
+		ui_event(DEMO_UI_FAILED, operation->request_id, rc);
+		LOG_ERR("camera acquisition failed: %d", rc);
+		return rc;
+	}
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_store_promote(&image_store, staging);
+	k_mutex_unlock(&image_lock);
+	if (rc != 0) {
+		operation_active = false;
+		ui_event(DEMO_UI_FAILED, operation->request_id, rc);
+		return rc;
+	}
+	LOG_INF("local image ready request=%u", operation->request_id);
 	outgoing_active = true;
 	ui_event(DEMO_UI_CFDP_TX, operation->request_id, 0);
-	status = ccsds_cfdp_service_send_file(&cfdp_service, &source_ops, &request,
-					      &transaction_id);
+	status =
+		ccsds_cfdp_service_send_file(&cfdp_service, &source_ops, &request, &transaction_id);
 	if (status != CCSDS_CFDP_STATUS_OK) {
 		operation_active = false;
 		outgoing_active = false;
 		ui_event(DEMO_UI_FAILED, operation->request_id, status);
-		return false;
+		return -EIO;
 	}
-	return true;
+	return 0;
 }
 
 static void process_capture_command(const struct router_message *message, uint64_t now)
@@ -498,8 +529,7 @@ static void process_capture_command(const struct router_message *message, uint64
 	    command.requesting_entity_id != CONFIG_EYE_DEMO_PEER_ENTITY_ID) {
 		result = DEMO_COMMAND_INVALID;
 	} else if (demo_dedup_check_and_record(&dedup_cache, command.requesting_entity_id,
-					       command.request_id, now,
-					       REQUEST_RETENTION_MS)) {
+					       command.request_id, now, REQUEST_RETENTION_MS)) {
 		result = DEMO_COMMAND_DUPLICATE;
 	} else if (operation_active || !peer_ready) {
 		result = DEMO_COMMAND_BUSY;
@@ -510,8 +540,8 @@ static void process_capture_command(const struct router_message *message, uint64
 			.request_id = command.request_id,
 			.has_request_id = true,
 		};
-		result = start_send_operation(&operation) ? DEMO_COMMAND_ACCEPTED
-							 : DEMO_COMMAND_BUSY;
+		result = start_send_operation(&operation) == 0 ? DEMO_COMMAND_ACCEPTED
+							       : DEMO_COMMAND_BUSY;
 	}
 	send_command_status(command.request_id == 0u ? response_request_id : command.request_id,
 			    result);
@@ -590,9 +620,10 @@ static void process_router_messages(uint64_t now)
 				ui_event(DEMO_UI_CFDP_RX, 0u, 0);
 			}
 			status = ccsds_cfdp_entity_receive_pdu(&cfdp_service.entity, &receive_ops,
-							message.payload, message.length);
+							       message.payload, message.length);
 			if (status != CCSDS_CFDP_STATUS_OK) {
-				LOG_WRN("CFDP input rejected status=%d sender_active=%u receiver_active=%u",
+				LOG_WRN("CFDP input rejected status=%d sender_active=%u "
+					"receiver_active=%u",
 					status, cfdp_service.entity.sender.active,
 					cfdp_service.entity.receiver.active);
 			}
@@ -611,9 +642,8 @@ static void process_router_messages(uint64_t now)
 	}
 }
 
-static void flush_progress(struct progress_update *progress,
-			   enum demo_transfer_direction direction, uint64_t now,
-			   bool force)
+static void flush_progress(struct progress_update *progress, enum demo_transfer_direction direction,
+			   uint64_t now, bool force)
 {
 	if (!progress->pending || (!force && now < progress->next_ui_ms)) {
 		return;
@@ -630,11 +660,11 @@ static void process_cfdp_events(uint64_t now)
 
 	while (k_msgq_get(&cfdp_event_queue, &message, K_NO_WAIT) == 0) {
 		struct progress_update *progress =
-			message.event.direction == CCSDS_CFDP_DIRECTION_SENDER ?
-			&tx_progress : &rx_progress;
+			message.event.direction == CCSDS_CFDP_DIRECTION_SENDER ? &tx_progress
+									       : &rx_progress;
 		enum demo_transfer_direction direction =
-			message.event.direction == CCSDS_CFDP_DIRECTION_SENDER ?
-			DEMO_TRANSFER_TX : DEMO_TRANSFER_RX;
+			message.event.direction == CCSDS_CFDP_DIRECTION_SENDER ? DEMO_TRANSFER_TX
+									       : DEMO_TRANSFER_RX;
 
 		if (message.event.type == CCSDS_CFDP_EVENT_TRANSACTION_STARTED ||
 		    message.event.type == CCSDS_CFDP_EVENT_FILE_SEGMENT_SENT ||
@@ -652,8 +682,7 @@ static void process_cfdp_events(uint64_t now)
 
 		if (message.event.type == CCSDS_CFDP_EVENT_COMPLETE ||
 		    message.event.type == CCSDS_CFDP_EVENT_FAILED) {
-			bool sender =
-				message.event.direction == CCSDS_CFDP_DIRECTION_SENDER;
+			bool sender = message.event.direction == CCSDS_CFDP_DIRECTION_SENDER;
 			bool success = message.event.type == CCSDS_CFDP_EVENT_COMPLETE &&
 				       message.event.status == CCSDS_CFDP_STATUS_OK;
 			uint32_t request_id = sender ? active_operation.request_id : 0u;
@@ -668,10 +697,8 @@ static void process_cfdp_events(uint64_t now)
 				success = success && receive_object.verified;
 			}
 			LOG_INF("CFDP %s terminal event=%u status=%d transaction=%llu:%llu",
-				sender ? "TX" : "RX", message.event.type,
-				message.event.status,
-				(unsigned long long)
-					message.event.transaction_id.source_entity_id,
+				sender ? "TX" : "RX", message.event.type, message.event.status,
+				(unsigned long long)message.event.transaction_id.source_entity_id,
 				(unsigned long long)
 					message.event.transaction_id.transaction_sequence_number);
 			if (sender && active_operation.has_request_id && !success &&
@@ -679,8 +706,8 @@ static void process_cfdp_events(uint64_t now)
 				send_command_status(active_operation.request_id,
 						    DEMO_COMMAND_TIMED_OUT);
 			}
-			ui_event(success ? DEMO_UI_COMPLETE : DEMO_UI_FAILED,
-				 request_id, sender ? DEMO_TRANSFER_TX : DEMO_TRANSFER_RX);
+			ui_event(success ? DEMO_UI_COMPLETE : DEMO_UI_FAILED, request_id,
+				 sender ? DEMO_TRANSFER_TX : DEMO_TRANSFER_RX);
 			if (sender) {
 				operation_active = false;
 				outgoing_active = false;
@@ -703,8 +730,8 @@ static void process_actions(uint64_t now)
 				.origin = OPERATION_LOCAL_BUTTON,
 			};
 
-			if (!start_send_operation(&operation)) {
-				ui_event(DEMO_UI_FAILED, 0u, -EBUSY);
+			if (start_send_operation(&operation) == -EBUSY) {
+				ui_event(DEMO_UI_BUSY, 0u, -EBUSY);
 			}
 		} else {
 			uint8_t payload[DEMO_CAPTURE_COMMAND_LEN];
@@ -734,7 +761,7 @@ static void process_actions(uint64_t now)
 static void trace_receiver_closure(void)
 {
 	const bool waiting = cfdp_service.entity.receiver.active &&
-		cfdp_service.entity.receiver.waiting_for_finished_ack;
+			     cfdp_service.entity.receiver.waiting_for_finished_ack;
 	const uint32_t retries = cfdp_service.entity.receiver.retry_count;
 
 	if (waiting && (!receiver_wait_logged || retries != receiver_retry_logged)) {
@@ -800,28 +827,31 @@ static int initialize_protocol(void)
 	    ccsds_cfdp_service_init(&cfdp_service, &cfdp_config) != CCSDS_CFDP_STATUS_OK) {
 		return -EINVAL;
 	}
-	rc = ccsds_router_register_apid(&router, CONFIG_EYE_DEMO_CFDP_APID,
-					cfdp_router_handler, NULL);
+	rc = ccsds_router_register_apid(&router, CONFIG_EYE_DEMO_CFDP_APID, cfdp_router_handler,
+					NULL);
 	rc = rc == 0 ? ccsds_router_register_apid(&router, CONFIG_EYE_DEMO_COMMAND_APID,
-						  command_router_handler, NULL) : rc;
-	rc = rc == 0 ? ccsds_router_register_apid(&router,
-						  CONFIG_EYE_DEMO_COMMAND_STATUS_APID,
-						  command_status_router_handler, NULL) : rc;
-	rc = rc == 0 ? ccsds_router_register_apid(&router,
-						  CONFIG_EYE_DEMO_PEER_STATUS_APID,
-						  peer_status_router_handler, NULL) : rc;
+						  command_router_handler, NULL)
+		     : rc;
+	rc = rc == 0 ? ccsds_router_register_apid(&router, CONFIG_EYE_DEMO_COMMAND_STATUS_APID,
+						  command_status_router_handler, NULL)
+		     : rc;
+	rc = rc == 0 ? ccsds_router_register_apid(&router, CONFIG_EYE_DEMO_PEER_STATUS_APID,
+						  peer_status_router_handler, NULL)
+		     : rc;
 	return rc == 0 ? ccsds_udp_start(&udp) : rc;
 }
 
-static void wifi_event_handler(struct net_mgmt_event_callback *callback,
-			       uint64_t event, struct net_if *iface)
+static void wifi_event_handler(struct net_mgmt_event_callback *callback, uint64_t event,
+			       struct net_if *iface)
 {
 	const struct wifi_status *status = callback->info;
 	struct network_event_message message;
 
 	ARG_UNUSED(iface);
-	message.type = event == NET_EVENT_WIFI_CONNECT_RESULT && status != NULL &&
-		       status->status == 0 ? NETWORK_ASSOCIATED : NETWORK_DISCONNECTED;
+	message.type =
+		event == NET_EVENT_WIFI_CONNECT_RESULT && status != NULL && status->status == 0
+			? NETWORK_ASSOCIATED
+			: NETWORK_DISCONNECTED;
 	(void)k_msgq_put(&network_event_queue, &message, K_NO_WAIT);
 }
 
@@ -841,6 +871,10 @@ static void worker(void *p1, void *p2, void *p3)
 	ARG_UNUSED(p1);
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
+	camera_status = demo_camera_init(&camera_adapter);
+	if (camera_status != 0) {
+		LOG_ERR("camera initialization failed: %d", camera_status);
+	}
 	ui_event(DEMO_UI_NETWORK_CONNECTING, 0u, 0);
 	if (net_mgmt(NET_REQUEST_WIFI_CONNECT, wifi_iface, &connect, sizeof(connect)) != 0) {
 		ui_event(DEMO_UI_NETWORK_FAILED, 0u, -EIO);
@@ -878,7 +912,7 @@ static void worker(void *p1, void *p2, void *p3)
 		}
 		while (k_msgq_get(&rx_queue, &datagram, K_NO_WAIT) == 0) {
 			(void)ccsds_profile_input_dispatch_unit(&input_profile, datagram.data,
-							 datagram.length);
+								datagram.length);
 			process_router_messages(now);
 		}
 		process_router_messages(now);
@@ -895,7 +929,8 @@ static void worker(void *p1, void *p2, void *p3)
 				peer_ready = false;
 				ui_event(DEMO_UI_PEER_ABSENT, 0u, 0);
 			}
-			if (pending_request_deadline_ms != 0u && now >= pending_request_deadline_ms) {
+			if (pending_request_deadline_ms != 0u &&
+			    now >= pending_request_deadline_ms) {
 				ui_event(DEMO_UI_COMMAND_RESULT, pending_request_id,
 					 DEMO_COMMAND_TIMED_OUT);
 				pending_request_deadline_ms = 0u;
@@ -907,15 +942,18 @@ static void worker(void *p1, void *p2, void *p3)
 
 int demo_service_start(void)
 {
+	k_mutex_init(&image_lock);
+	demo_image_store_init(&image_store, image_slots, image_objects, ARRAY_SIZE(image_slots));
 	wifi_iface = net_if_get_wifi_sta();
 	if (wifi_iface == NULL) {
 		return -ENODEV;
 	}
 	net_mgmt_init_event_callback(&wifi_callback, wifi_event_handler,
-		NET_EVENT_WIFI_CONNECT_RESULT | NET_EVENT_WIFI_DISCONNECT_RESULT);
+				     NET_EVENT_WIFI_CONNECT_RESULT |
+					     NET_EVENT_WIFI_DISCONNECT_RESULT);
 	net_mgmt_add_event_callback(&wifi_callback);
-	k_thread_create(&worker_thread, worker_stack, K_THREAD_STACK_SIZEOF(worker_stack),
-			worker, NULL, NULL, NULL, WORKER_PRIORITY, 0, K_NO_WAIT);
+	k_thread_create(&worker_thread, worker_stack, K_THREAD_STACK_SIZEOF(worker_stack), worker,
+			NULL, NULL, NULL, WORKER_PRIORITY, 0, K_NO_WAIT);
 	(void)k_thread_name_set(&worker_thread, "eye_protocol");
 	return 0;
 }
@@ -937,4 +975,46 @@ bool demo_service_queue_remote_request(void)
 bool demo_service_get_ui_event(struct demo_ui_event *event)
 {
 	return k_msgq_get(&ui_queue, event, K_NO_WAIT) == 0;
+}
+
+int demo_service_acquire_display_image(const struct demo_image_object **object)
+{
+	struct demo_image_slot *slot = NULL;
+	int rc;
+
+	if (object == NULL) {
+		return -EINVAL;
+	}
+	k_mutex_lock(&image_lock, K_FOREVER);
+	rc = demo_image_store_acquire_display(&image_store, &slot);
+	k_mutex_unlock(&image_lock);
+	if (rc == 0) {
+		*object = slot->object;
+	} else {
+		LOG_WRN("SHOW cannot acquire local image: %d", rc);
+	}
+	return rc;
+}
+
+void demo_service_release_display_image(const struct demo_image_object *object)
+{
+	if (object == NULL) {
+		return;
+	}
+	k_mutex_lock(&image_lock, K_FOREVER);
+	for (size_t i = 0; i < ARRAY_SIZE(image_slots); ++i) {
+		if (image_slots[i].object == object) {
+			int rc = demo_image_store_release_display(&image_store, &image_slots[i]);
+
+			k_mutex_unlock(&image_lock);
+			if (rc != 0) {
+				LOG_ERR("SHOW release failed object=%p slot=%u rc=%d", object,
+					(unsigned int)i, rc);
+			}
+			__ASSERT_NO_MSG(rc == 0);
+			return;
+		}
+	}
+	k_mutex_unlock(&image_lock);
+	__ASSERT_NO_MSG(false);
 }

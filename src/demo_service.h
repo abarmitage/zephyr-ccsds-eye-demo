@@ -6,6 +6,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "demo_image.h"
 #include "demo_protocol.h"
 
 enum demo_ui_event_type {
@@ -18,6 +19,8 @@ enum demo_ui_event_type {
 	DEMO_UI_TC_TX,
 	DEMO_UI_TC_RX,
 	DEMO_UI_COMMAND_RESULT,
+	DEMO_UI_CAPTURING,
+	DEMO_UI_BUSY,
 	DEMO_UI_CFDP_TX,
 	DEMO_UI_CFDP_RX,
 	DEMO_UI_CFDP_PROGRESS,
@@ -44,5 +47,7 @@ int demo_service_start(void);
 bool demo_service_queue_local_send(void);
 bool demo_service_queue_remote_request(void);
 bool demo_service_get_ui_event(struct demo_ui_event *event);
+int demo_service_acquire_display_image(const struct demo_image_object **object);
+void demo_service_release_display_image(const struct demo_image_object *object);
 
 #endif /* CCSDS_EYE_DEMO_SERVICE_H */

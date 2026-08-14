@@ -1,57 +1,88 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="760" height="430" viewBox="0 0 760 430" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="620" viewBox="0 0 760 620" role="img" aria-labelledby="title desc">
   <title id="title">ESP32-S3-EYE demo controls and screen</title>
-  <desc id="desc">Buttons A and B are on the left of the display. The local spacecraft appears on the left of the screen and the peer on the right.</desc>
+  <desc id="desc">A portrait EYE board with a large camera above a square display. Send and Request buttons sit to the left of the camera, and both buttons to its right toggle Show.</desc>
   <defs>
-    <marker id="arrow" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
-      <path d="M0,0 L9,3.5 L0,7 Z" fill="#cbd5e1"/>
-    </marker>
+    <radialGradient id="camera-well" cx="48%" cy="45%" r="55%">
+      <stop offset="0" stop-color="#111b22"/>
+      <stop offset="0.42" stop-color="#18262f"/>
+      <stop offset="0.76" stop-color="#34444f"/>
+      <stop offset="1" stop-color="#84929c"/>
+    </radialGradient>
+    <radialGradient id="lens" cx="42%" cy="38%" r="62%">
+      <stop offset="0" stop-color="#77a6be"/>
+      <stop offset="0.28" stop-color="#263e4e"/>
+      <stop offset="0.7" stop-color="#0d1820"/>
+      <stop offset="1" stop-color="#020507"/>
+    </radialGradient>
   </defs>
 
-  <rect width="760" height="430" rx="18" fill="#f4f7fa"/>
+  <rect width="760" height="650" rx="18" fill="#f4f7fa"/>
   <text x="380" y="34" text-anchor="middle" font-family="sans-serif" font-size="20" font-weight="700" fill="#18232e">View from EYE-1</text>
 
-  <!-- Board and its two left-side controls. -->
-  <rect x="142" y="54" width="500" height="322" rx="24" fill="#26333d" stroke="#111a21" stroke-width="4"/>
-  <rect x="111" y="116" width="39" height="55" rx="10" fill="#d9e1e7" stroke="#26333d" stroke-width="4"/>
-  <rect x="111" y="250" width="39" height="55" rx="10" fill="#d9e1e7" stroke="#26333d" stroke-width="4"/>
-  <circle cx="130" cy="143" r="11" fill="#647583"/>
-  <circle cx="130" cy="277" r="11" fill="#647583"/>
+  <!-- Portrait board, camera, and controls. -->
+  <rect x="205" y="55" width="350" height="545" rx="25" fill="#26333d" stroke="#111a21" stroke-width="4"/>
+  <circle cx="230" cy="80" r="5" fill="#111a21"/>
+  <circle cx="530" cy="80" r="5" fill="#111a21"/>
+  <circle cx="230" cy="575" r="5" fill="#111a21"/>
+  <circle cx="530" cy="575" r="5" fill="#111a21"/>
 
-  <text x="91" y="137" text-anchor="end" font-family="sans-serif" font-size="18" font-weight="700" fill="#18232e">A</text>
-  <text x="91" y="158" text-anchor="end" font-family="sans-serif" font-size="14" fill="#52616d">SEND</text>
-  <line x1="98" y1="143" x2="113" y2="143" stroke="#52616d" stroke-width="2"/>
-  <text x="91" y="271" text-anchor="end" font-family="sans-serif" font-size="18" font-weight="700" fill="#18232e">B</text>
-  <text x="91" y="292" text-anchor="end" font-family="sans-serif" font-size="14" fill="#52616d">REQUEST</text>
-  <line x1="98" y1="277" x2="113" y2="277" stroke="#52616d" stroke-width="2"/>
+  <circle cx="380" cy="137" r="66" fill="url(#camera-well)" stroke="#111a21" stroke-width="3"/>
+  <circle cx="380" cy="137" r="49" fill="none" stroke="#263640" stroke-width="2" opacity="0.8"/>
+  <circle cx="380" cy="137" r="31" fill="#0a1117" stroke="#53636e" stroke-width="3"/>
+  <circle cx="380" cy="137" r="22" fill="url(#lens)" stroke="#020507" stroke-width="3"/>
+  <circle cx="372" cy="129" r="5" fill="#d8f1ff" opacity="0.32"/>
 
-  <!-- Display. -->
-  <rect x="169" y="77" width="446" height="276" rx="10" fill="#05090e" stroke="#71808c" stroke-width="3"/>
-  <text x="188" y="105" font-family="monospace" font-size="17" font-weight="700" fill="#26c6da">EYE-1</text>
-  <text x="392" y="105" text-anchor="middle" font-family="monospace" font-size="15" fill="#6f808f">CFDP</text>
-  <text x="596" y="105" text-anchor="end" font-family="monospace" font-size="17" font-weight="700" fill="#f5a623">EYE-2</text>
-  <line x1="169" y1="116" x2="615" y2="116" stroke="#26333d"/>
+  <rect x="187" y="83" width="42" height="49" rx="10" fill="#d9e1e7" stroke="#26333d" stroke-width="4"/>
+  <rect x="187" y="153" width="42" height="49" rx="10" fill="#d9e1e7" stroke="#26333d" stroke-width="4"/>
+  <circle cx="208" cy="107" r="11" fill="#647583"/>
+  <circle cx="208" cy="177" r="11" fill="#647583"/>
+  <rect x="531" y="83" width="42" height="49" rx="10" fill="#d9e1e7" stroke="#26333d" stroke-width="4"/>
+  <rect x="531" y="153" width="42" height="49" rx="10" fill="#d9e1e7" stroke="#26333d" stroke-width="4"/>
+  <circle cx="552" cy="107" r="11" fill="#647583"/>
+  <circle cx="552" cy="177" r="11" fill="#647583"/>
 
-  <!-- Stylised spacecraft. -->
-  <rect x="198" y="148" width="26" height="24" fill="#e1e9f0"/>
-  <rect x="181" y="154" width="14" height="12" fill="#26c6da"/>
-  <rect x="227" y="154" width="14" height="12" fill="#26c6da"/>
-  <circle cx="211" cy="160" r="4" fill="#05090e"/>
-  <rect x="560" y="148" width="26" height="24" fill="#e1e9f0"/>
-  <rect x="543" y="154" width="14" height="12" fill="#f5a623"/>
-  <rect x="589" y="154" width="14" height="12" fill="#f5a623"/>
-  <circle cx="573" cy="160" r="4" fill="#05090e"/>
-  <text x="211" y="194" text-anchor="middle" font-family="monospace" font-size="13" fill="#6f808f">ID 1</text>
-  <text x="573" y="194" text-anchor="middle" font-family="monospace" font-size="13" fill="#6f808f">ID 2</text>
+  <text x="166" y="113" text-anchor="end" font-family="sans-serif" font-size="16" font-weight="700" fill="#18232e">SEND</text>
+  <line x1="173" y1="107" x2="189" y2="107" stroke="#52616d" stroke-width="2"/>
+  <text x="166" y="183" text-anchor="end" font-family="sans-serif" font-size="16" font-weight="700" fill="#18232e">REQUEST</text>
+  <line x1="173" y1="177" x2="189" y2="177" stroke="#52616d" stroke-width="2"/>
+  <text x="594" y="105" font-family="sans-serif" font-size="16" font-weight="700" fill="#18232e">SHOW</text>
+  <text x="594" y="122" font-family="sans-serif" font-size="12" fill="#52616d">TOGGLE</text>
+  <line x1="571" y1="107" x2="587" y2="107" stroke="#52616d" stroke-width="2"/>
+  <text x="594" y="175" font-family="sans-serif" font-size="16" font-weight="700" fill="#18232e">SHOW</text>
+  <text x="594" y="192" font-family="sans-serif" font-size="12" fill="#52616d">TOGGLE</text>
+  <line x1="571" y1="177" x2="587" y2="177" stroke="#52616d" stroke-width="2"/>
 
-  <!-- Example transfer direction. -->
-  <line x1="252" y1="159" x2="527" y2="159" stroke="#cbd5e1" stroke-width="3" marker-end="url(#arrow)"/>
-  <rect x="371" y="151" width="19" height="16" rx="2" fill="#26c6da"/>
-  <text x="392" y="221" text-anchor="middle" font-family="monospace" font-size="16" fill="#e1e9f0">READY / PEER OK</text>
+  <!-- Square 240 x 240 display. -->
+  <rect x="245" y="230" width="270" height="270" rx="8" fill="#05090e" stroke="#71808c" stroke-width="3"/>
+  <text x="256" y="251" font-family="monospace" font-size="13" font-weight="700" fill="#26c6da">EYE-1</text>
+  <text x="380" y="251" text-anchor="middle" font-family="monospace" font-size="12" fill="#6f808f">CFDP</text>
+  <text x="504" y="251" text-anchor="end" font-family="monospace" font-size="13" font-weight="700" fill="#f5a623">EYE-2</text>
+  <line x1="245" y1="260" x2="515" y2="260" stroke="#26333d"/>
 
-  <line x1="169" y1="284" x2="615" y2="284" stroke="#26333d"/>
-  <text x="188" y="312" font-family="monospace" font-size="15" fill="#e1e9f0">A  SEND</text>
-  <text x="596" y="312" text-anchor="end" font-family="monospace" font-size="15" fill="#e1e9f0">B  REQUEST</text>
-  <text x="392" y="337" text-anchor="middle" font-family="monospace" font-size="12" fill="#6f808f">local spacecraft is always on the left</text>
+  <rect x="268" y="285" width="17" height="16" fill="#e1e9f0"/>
+  <rect x="257" y="289" width="9" height="8" fill="#26c6da"/>
+  <rect x="287" y="289" width="9" height="8" fill="#26c6da"/>
+  <circle cx="277" cy="293" r="3" fill="#05090e"/>
+  <rect x="475" y="285" width="17" height="16" fill="#e1e9f0"/>
+  <rect x="464" y="289" width="9" height="8" fill="#f5a623"/>
+  <rect x="494" y="289" width="9" height="8" fill="#f5a623"/>
+  <circle cx="484" cy="293" r="3" fill="#05090e"/>
+  <text x="277" y="317" text-anchor="middle" font-family="monospace" font-size="10" fill="#6f808f">ID 1</text>
+  <text x="484" y="317" text-anchor="middle" font-family="monospace" font-size="10" fill="#6f808f">ID 2</text>
 
-  <text x="380" y="406" text-anchor="middle" font-family="sans-serif" font-size="15" fill="#52616d">On EYE-2 the orange spacecraft moves to the left; EYE-1 remains cyan.</text>
+  <line x1="302" y1="293" x2="458" y2="293" stroke="#cbd5e1" stroke-width="2"/>
+  <path d="M458,293 l-8,-5 v10 z" fill="#cbd5e1"/>
+  <rect x="373" y="288" width="14" height="11" rx="1" fill="#26c6da"/>
+  <text x="380" y="353" text-anchor="middle" font-family="monospace" font-size="13" fill="#e1e9f0">READY / PEER OK</text>
+  <rect x="285" y="373" width="190" height="6" rx="1" fill="#26333d"/>
+  <rect x="285" y="373" width="128" height="6" rx="1" fill="#26c6da"/>
+  <rect x="285" y="387" width="190" height="6" rx="1" fill="#26333d"/>
+
+  <line x1="245" y1="431" x2="515" y2="431" stroke="#26333d"/>
+  <text x="251" y="449" font-family="monospace" font-size="11" fill="#e1e9f0">&lt; SEND</text>
+  <text x="251" y="464" font-family="monospace" font-size="11" fill="#e1e9f0">&lt; REQUEST</text>
+  <text x="509" y="456" text-anchor="end" font-family="monospace" font-size="11" fill="#e1e9f0">SHOW &gt;</text>
+  <text x="380" y="485" text-anchor="middle" font-family="monospace" font-size="10" fill="#6f808f">192.168.1.20</text>
+
+  <text x="380" y="535" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="700" fill="#cbd5e1">ESP32-S3-EYE</text>
 </svg>
