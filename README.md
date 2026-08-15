@@ -1,7 +1,7 @@
 # CCSDS EYE demo
 
 This demo uses two ESP32-S3-EYE boards to capture and exchange camera images
-over acknowledged CCSDS CFDP space *packets* carried over Wi-Fi UDP to simulate space radio links.
+over acknowledged CCSDS CFDP space *packets* carried over Wi-Fi UDP to simulate noisy, intermittent & slow space radio links.
 
 The current working demo is packet-based with simple waits to limit the transmission rate to what
 experimentation shows the peer can (mostly) absorb. In CCSDS protocol terms, it only "proves" CFDP. 
