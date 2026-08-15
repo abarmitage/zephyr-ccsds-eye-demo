@@ -3,6 +3,14 @@
 This demo uses two ESP32-S3-EYE boards to capture and exchange camera images
 over acknowledged CCSDS CFDP space *packets* carried directly over Wi-Fi UDP.
 
+The current working demo is packet-based with simple waits to limit the transmiasion rate. 
+In CCSDS protocol terms, it only "proves" CFDP.
+
+The intended next steps are:
+
+- use bidirectional flow-controlled USLP frames to carry the packets,
+- add security with SDLS
+
 ## Controls
 
 Wait until both displays have registered to Wi-Fi and show `READY / PEER OK`.
