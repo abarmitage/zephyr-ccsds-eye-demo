@@ -1,11 +1,11 @@
 # CCSDS EYE demo
 
 This demo uses two ESP32-S3-EYE boards to capture and exchange camera images
-over acknowledged CCSDS CFDP carried by Wi-Fi UDP.
+over acknowledged CCSDS CFDP space *packets* carried directly over Wi-Fi UDP.
 
 ## Controls
 
-Wait until both displays show `READY / PEER OK`.
+Wait until both displays have registered to Wi-Fi and show `READY / PEER OK`.
 
 - **SEND** (upper-left): capture a fresh image on this board and send it to the
   other board.

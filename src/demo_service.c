@@ -539,8 +539,20 @@ static void send_command_status(uint32_t request_id, enum demo_command_result re
 	}
 }
 
-static int start_send_operation(const struct send_operation *operation)
+static int claim_send_operation(const struct send_operation *operation)
 {
+	if (!protocol_ready || !peer_ready || operation_active ||
+	    operation->destination_entity_id != CONFIG_EYE_DEMO_PEER_ENTITY_ID) {
+		return -EBUSY;
+	}
+	active_operation = *operation;
+	operation_active = true;
+	return 0;
+}
+
+static int execute_send_operation(void)
+{
+	const struct send_operation *operation = &active_operation;
 	struct demo_image_slot *staging = NULL;
 	ccsds_cfdp_transaction_id_t transaction_id;
 	const ccsds_cfdp_put_request_t request = {
@@ -553,12 +565,6 @@ static int start_send_operation(const struct send_operation *operation)
 	enum ccsds_cfdp_status status;
 	int rc;
 
-	if (!protocol_ready || !peer_ready || operation_active ||
-	    operation->destination_entity_id != CONFIG_EYE_DEMO_PEER_ENTITY_ID) {
-		return -EBUSY;
-	}
-	active_operation = *operation;
-	operation_active = true;
 	ui_event(DEMO_UI_CAPTURING, operation->request_id, 0);
 	k_sleep(K_MSEC(PRE_CAPTURE_QUIET_PERIOD_MS));
 	k_mutex_lock(&image_lock, K_FOREVER);
@@ -629,6 +635,13 @@ static int start_send_operation(const struct send_operation *operation)
 	return 0;
 }
 
+static int start_send_operation(const struct send_operation *operation)
+{
+	int rc = claim_send_operation(operation);
+
+	return rc == 0 ? execute_send_operation() : rc;
+}
+
 static void process_capture_command(const struct router_message *message, uint64_t now)
 {
 	struct demo_capture_command command = {0};
@@ -655,8 +668,14 @@ static void process_capture_command(const struct router_message *message, uint64
 			.request_id = command.request_id,
 			.has_request_id = true,
 		};
-		result = start_send_operation(&operation) == 0 ? DEMO_COMMAND_ACCEPTED
-							       : DEMO_COMMAND_BUSY;
+		if (claim_send_operation(&operation) == 0) {
+			send_command_status(command.request_id == 0u ? response_request_id
+								 : command.request_id,
+					    DEMO_COMMAND_ACCEPTED);
+			(void)execute_send_operation();
+			return;
+		}
+		result = DEMO_COMMAND_BUSY;
 	}
 	send_command_status(command.request_id == 0u ? response_request_id : command.request_id,
 			    result);
@@ -717,12 +736,21 @@ static void process_router_messages(uint64_t now)
 	struct router_message message;
 
 	while (k_msgq_get(&router_queue, &message, K_NO_WAIT) == 0) {
+		if (message.type != ROUTER_PEER_STATUS) {
+			peer_last_seen_ms = now;
+			if (!peer_ready) {
+				peer_ready = true;
+				ui_event(DEMO_UI_PEER_READY, 0u, 0);
+			}
+		}
 		switch (message.type) {
 		case ROUTER_CFDP: {
 			ccsds_cfdp_pdu_header_t header;
 			size_t header_length = 0u;
 			enum ccsds_cfdp_status status;
 			bool starts_receive;
+
+			pending_request_deadline_ms = 0u;
 
 			starts_receive =
 				ccsds_cfdp_decode_header(message.payload, message.length, &header,
@@ -1091,7 +1119,9 @@ static void worker(void *p1, void *p2, void *p3)
 				send_peer_status();
 				next_status_ms = now + STATUS_PERIOD_MS;
 			}
-			if (peer_ready && now - peer_last_seen_ms > PEER_TIMEOUT_MS) {
+			if (peer_ready && !operation_active &&
+			    !cfdp_service.entity.receiver.active &&
+			    now - peer_last_seen_ms > PEER_TIMEOUT_MS) {
 				peer_ready = false;
 				ui_event(DEMO_UI_PEER_ABSENT, 0u, 0);
 			}

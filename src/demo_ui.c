@@ -23,6 +23,7 @@ LOG_MODULE_REGISTER(eye_ui, CONFIG_LOG_DEFAULT_LEVEL);
 #define PACKET_WIDTH          10
 #define TRANSFER_ANIMATION_MS 900U
 #define TC_ANIMATION_MS       250U
+#define COMPLETION_HOLD_MS    3000U
 
 enum demo_state {
 	DEMO_BOOT,
@@ -550,6 +551,10 @@ void demo_ui_tick(uint32_t now_ms)
 	case DEMO_BUSY_STATE:
 		break;
 	case DEMO_COMPLETE:
+		if (elapsed >= COMPLETION_HOLD_MS) {
+			set_state(DEMO_IDLE, now_ms);
+		}
+		break;
 	case DEMO_FAILED:
 	case DEMO_IDLE:
 	case DEMO_BOOT:
