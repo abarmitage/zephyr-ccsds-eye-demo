@@ -7,7 +7,9 @@ The current working demo is packet-based with simple waits to limit the transmis
 experimentation shows the peer can (mostly) absorb. In CCSDS protocol terms, it only "proves" CFDP. 
 
 You may occasionally see CFDP go into RECOVERY state. This is intentional - while it requests retransmission of missing packets.
-Usually (but not always) the image file transfer will complete. Occasional failures are part of the demo!
+Usually (but not always) the image file transfer will complete. Occasional failures are part of the demo! 
+
+(with USLP flow control, retransmission of lost frames will be at a lower protocol level and recovery should never be needed)
 
 The intended next steps are:
 
