@@ -24,10 +24,10 @@ described below.
 It's interesting to compare the two configurations:
 
 - **demo-uslp-cop1** - lost packets & frames are automatically recovered by
-  COP-1 during transmission. The sender can use a reduced transmit rate
-  limitation because the receiver's capacity to absorb frames is enforced by
-  COP-1 flow control. This can improve throughput, but comes at a cost of feedback 
-  of the CLCW in returned frames, even if the return link is idle.
+  COP-1 during transmission. The sender can attempt a higher transmit rate
+  because the receiver's capacity to absorb frames is enforced by
+  COP-1 flow control. This can improve throughput, at the cost of feedback 
+  of CLCW in returned frames, even if the return link is idle.
 - **demo-cfdp-packet** - after splitting the file into packets, and sending,
   CFDP automatically requests to fill any "gaps" in the received file.
   This requires CFDP to maintain a record of any missing areas
