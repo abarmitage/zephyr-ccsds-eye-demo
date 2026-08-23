@@ -34,10 +34,10 @@ CFDP's ability to recover missing sections of a file.
 
 The demo COP-1 implementation tolerates an initial difference in Frame Sequence
 Numbers between peers on first boot. On initial CLCW acquisition after boot, a
-board adopts the peer's clean CLCW Report Value and may send `BC_UNLOCK` if that
-peer is in Lockout state. A later sequence mismatch, lockout, or terminal retry
-exhaustion is reported as `LINK ERROR` and currently requires resetting both
-boards together. The demo does not automatically send `SET_VR`. `TRANSFER
+board adopts the peer's CLCW Report Value and may send `BC_UNLOCK` if that
+peer is in Lockout state. A later sequence mismatch, lockout, or retry
+exhaustion is reported as `LINK ERROR` (this currently requires resetting both
+boards together). The demo does not automatically send `SET_VR`. `TRANSFER
 FAILED` is reserved for an image transfer that actually failed at CFDP level.
 SDLS is not yet used.
 
