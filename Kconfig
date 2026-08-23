@@ -142,7 +142,7 @@ config EYE_DEMO_FEEDBACK_INTERVAL_MS
 
 config EYE_DEMO_MINIMUM_TRANSMIT_INTERVAL_MS
 	int "Minimum USLP route interval (ms)"
-	default 50
+	default 20
 	range 1 1000
 
 config EYE_DEMO_TRANSMISSION_LIMIT
