@@ -14,8 +14,8 @@ static bool valid_result(uint8_t result)
 	return result <= DEMO_COMMAND_TIMED_OUT;
 }
 
-int demo_capture_command_encode(const struct demo_capture_command *command,
-				uint8_t *buffer, size_t capacity)
+int demo_capture_command_encode(const struct demo_capture_command *command, uint8_t *buffer,
+				size_t capacity)
 {
 	if (command == NULL || buffer == NULL || capacity < DEMO_CAPTURE_COMMAND_LEN ||
 	    command->request_id == 0u || command->requesting_entity_id == 0u) {
@@ -34,9 +34,8 @@ int demo_capture_command_decode(const uint8_t *buffer, size_t length,
 				struct demo_capture_command *command)
 {
 	if (buffer == NULL || command == NULL || length != DEMO_CAPTURE_COMMAND_LEN ||
-	    buffer[0] != DEMO_PROTOCOL_VERSION ||
-	    buffer[1] != DEMO_MSG_CAPTURE_AND_RETURN || buffer[2] != 0u ||
-	    buffer[3] != 0u) {
+	    buffer[0] != DEMO_PROTOCOL_VERSION || buffer[1] != DEMO_MSG_CAPTURE_AND_RETURN ||
+	    buffer[2] != 0u || buffer[3] != 0u) {
 		return -EINVAL;
 	}
 	command->request_id = sys_get_be32(&buffer[4]);
@@ -44,8 +43,8 @@ int demo_capture_command_decode(const uint8_t *buffer, size_t length,
 	return command->request_id != 0u && command->requesting_entity_id != 0u ? 0 : -EINVAL;
 }
 
-int demo_command_status_encode(const struct demo_command_status *status,
-			       uint8_t *buffer, size_t capacity)
+int demo_command_status_encode(const struct demo_command_status *status, uint8_t *buffer,
+			       size_t capacity)
 {
 	if (status == NULL || buffer == NULL || capacity < DEMO_COMMAND_STATUS_LEN ||
 	    status->request_id == 0u || status->responding_entity_id == 0u ||
@@ -76,8 +75,7 @@ int demo_command_status_decode(const uint8_t *buffer, size_t length,
 	return status->request_id != 0u && status->responding_entity_id != 0u ? 0 : -EINVAL;
 }
 
-int demo_peer_status_encode(const struct demo_peer_status *status,
-			    uint8_t *buffer, size_t capacity)
+int demo_peer_status_encode(const struct demo_peer_status *status, uint8_t *buffer, size_t capacity)
 {
 	if (status == NULL || buffer == NULL || capacity < DEMO_PEER_STATUS_LEN ||
 	    status->entity_id == 0u || status->expected_peer_entity_id == 0u) {
@@ -98,16 +96,32 @@ int demo_peer_status_encode(const struct demo_peer_status *status,
 	sys_put_be16(status->peer_status_apid, &buffer[30]);
 	memcpy(&buffer[32], status->callsign, DEMO_CALLSIGN_LEN);
 	sys_put_be32(DEMO_IMAGE_OBJECT_SIZE, &buffer[40]);
+	sys_put_be16(status->local_spacecraft_id, &buffer[44]);
+	sys_put_be16(status->peer_spacecraft_id, &buffer[46]);
+	buffer[48] = status->local_source_or_destination;
+	buffer[49] = status->peer_source_or_destination;
+	buffer[50] = status->transmit_vcid;
+	buffer[51] = status->receive_vcid;
+	buffer[52] = status->transmit_map_id;
+	buffer[53] = status->receive_map_id;
+	sys_put_be16(status->maximum_frame_length, &buffer[54]);
+	buffer[56] = status->cop1_window_k;
+	buffer[57] = status->farm_window_width;
+	sys_put_be16(status->minimum_transmit_interval_ms, &buffer[58]);
+	sys_put_be16(status->retransmission_timeout_ms, &buffer[60]);
+	sys_put_be16(status->feedback_interval_ms, &buffer[62]);
+	buffer[64] = status->transmission_limit;
+	buffer[65] = status->initial_transmit_sequence;
+	buffer[66] = status->initial_receive_sequence;
 	return DEMO_PEER_STATUS_LEN;
 }
 
-int demo_peer_status_decode(const uint8_t *buffer, size_t length,
-			    struct demo_peer_status *status)
+int demo_peer_status_decode(const uint8_t *buffer, size_t length, struct demo_peer_status *status)
 {
 	if (buffer == NULL || status == NULL || length != DEMO_PEER_STATUS_LEN ||
 	    buffer[0] != DEMO_PROTOCOL_VERSION || buffer[1] != DEMO_MSG_PEER_STATUS ||
 	    buffer[2] != 0u || buffer[3] != 0u ||
-	    sys_get_be32(&buffer[40]) != DEMO_IMAGE_OBJECT_SIZE) {
+	    sys_get_be32(&buffer[40]) != DEMO_IMAGE_OBJECT_SIZE || buffer[67] != 0u) {
 		return -EINVAL;
 	}
 	memset(status, 0, sizeof(*status));
@@ -122,12 +136,28 @@ int demo_peer_status_decode(const uint8_t *buffer, size_t length,
 	status->command_status_apid = sys_get_be16(&buffer[28]);
 	status->peer_status_apid = sys_get_be16(&buffer[30]);
 	memcpy(status->callsign, &buffer[32], DEMO_CALLSIGN_LEN);
+	status->local_spacecraft_id = sys_get_be16(&buffer[44]);
+	status->peer_spacecraft_id = sys_get_be16(&buffer[46]);
+	status->local_source_or_destination = buffer[48];
+	status->peer_source_or_destination = buffer[49];
+	status->transmit_vcid = buffer[50];
+	status->receive_vcid = buffer[51];
+	status->transmit_map_id = buffer[52];
+	status->receive_map_id = buffer[53];
+	status->maximum_frame_length = sys_get_be16(&buffer[54]);
+	status->cop1_window_k = buffer[56];
+	status->farm_window_width = buffer[57];
+	status->minimum_transmit_interval_ms = sys_get_be16(&buffer[58]);
+	status->retransmission_timeout_ms = sys_get_be16(&buffer[60]);
+	status->feedback_interval_ms = sys_get_be16(&buffer[62]);
+	status->transmission_limit = buffer[64];
+	status->initial_transmit_sequence = buffer[65];
+	status->initial_receive_sequence = buffer[66];
 	return status->entity_id != 0u && status->expected_peer_entity_id != 0u ? 0 : -EINVAL;
 }
 
-enum demo_peer_validation
-demo_peer_status_validate(const struct demo_peer_status *status,
-			  const struct demo_peer_expectation *expected)
+enum demo_peer_validation demo_peer_status_validate(const struct demo_peer_status *status,
+						    const struct demo_peer_expectation *expected)
 {
 	if (status->entity_id == expected->local_entity_id) {
 		return DEMO_PEER_DUPLICATE_ENTITY;
@@ -144,15 +174,31 @@ demo_peer_status_validate(const struct demo_peer_status *status,
 	    status->command_apid != expected->command_apid ||
 	    status->command_status_apid != expected->command_status_apid ||
 	    status->peer_status_apid != expected->peer_status_apid ||
-	    memcmp(status->callsign, expected->peer_callsign, DEMO_CALLSIGN_LEN) != 0) {
+	    memcmp(status->callsign, expected->peer_callsign, DEMO_CALLSIGN_LEN) != 0 ||
+	    status->local_spacecraft_id != expected->peer_spacecraft_id ||
+	    status->peer_spacecraft_id != expected->local_spacecraft_id ||
+	    status->local_source_or_destination != expected->peer_source_or_destination ||
+	    status->peer_source_or_destination != expected->local_source_or_destination ||
+	    status->transmit_vcid != expected->receive_vcid ||
+	    status->receive_vcid != expected->transmit_vcid ||
+	    status->transmit_map_id != expected->receive_map_id ||
+	    status->receive_map_id != expected->transmit_map_id ||
+	    status->maximum_frame_length != expected->maximum_frame_length ||
+	    status->cop1_window_k != expected->cop1_window_k ||
+	    status->farm_window_width != expected->farm_window_width ||
+	    status->minimum_transmit_interval_ms != expected->minimum_transmit_interval_ms ||
+	    status->retransmission_timeout_ms != expected->retransmission_timeout_ms ||
+	    status->feedback_interval_ms != expected->feedback_interval_ms ||
+	    status->transmission_limit != expected->transmission_limit ||
+	    status->initial_transmit_sequence != expected->initial_receive_sequence ||
+	    status->initial_receive_sequence != expected->initial_transmit_sequence) {
 		return DEMO_PEER_CONFIG_MISMATCH;
 	}
 	return DEMO_PEER_VALID;
 }
 
-bool demo_dedup_check_and_record(struct demo_dedup_cache *cache,
-				 uint64_t entity_id, uint32_t request_id,
-				 uint64_t now_ms, uint64_t retention_ms)
+bool demo_dedup_check_and_record(struct demo_dedup_cache *cache, uint64_t entity_id,
+				 uint32_t request_id, uint64_t now_ms, uint64_t retention_ms)
 {
 	for (size_t i = 0; i < DEMO_DEDUP_CAPACITY; ++i) {
 		if (cache->entries[i].active && cache->entries[i].expires_ms <= now_ms) {

@@ -7,8 +7,8 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/drivers/display.h>
+#include <zephyr/dt-bindings/input/input-event-codes.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/util.h>
@@ -427,6 +427,10 @@ void demo_ui_handle_event(const struct demo_ui_event *event)
 	case DEMO_UI_PEER_INVALID:
 		set_state(DEMO_FAILED, now);
 		lv_label_set_text_fmt(status_label, "PEER CONFIG ERROR %d", event->detail);
+		break;
+	case DEMO_UI_LINK_FAILED:
+		set_state(DEMO_FAILED, now);
+		lv_label_set_text(status_label, "LINK ERROR");
 		break;
 	case DEMO_UI_TC_TX:
 		tc_incoming = false;

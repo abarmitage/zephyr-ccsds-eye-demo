@@ -90,4 +90,102 @@ config EYE_DEMO_PEER_STATUS_APID
 	default 0x353
 	range 1 0x7ff
 
+config EYE_DEMO_LOCAL_SPACECRAFT_ID
+	hex "Local USLP spacecraft ID"
+	default 0x1001 if EYE_DEMO_ROLE_A
+	default 0x1002 if EYE_DEMO_ROLE_B
+	range 0 0xffff
+
+config EYE_DEMO_PEER_SPACECRAFT_ID
+	hex "Remote USLP spacecraft ID"
+	default 0x1002 if EYE_DEMO_ROLE_A
+	default 0x1001 if EYE_DEMO_ROLE_B
+	range 0 0xffff
+
+config EYE_DEMO_LOCAL_SCID_IS_SOURCE
+	bool "Local spacecraft ID uses the USLP source indication"
+	default y
+
+config EYE_DEMO_PEER_SCID_IS_SOURCE
+	bool "Remote spacecraft ID uses the USLP source indication"
+	default y
+
+config EYE_DEMO_TRANSMIT_VCID
+	int "Transmit USLP virtual channel ID"
+	default 1
+	range 0 62
+
+config EYE_DEMO_RECEIVE_VCID
+	int "Receive USLP virtual channel ID"
+	default 1
+	range 0 62
+
+config EYE_DEMO_TRANSMIT_MAP_ID
+	int "Transmit USLP MAP ID"
+	default 3
+	range 0 15
+
+config EYE_DEMO_RECEIVE_MAP_ID
+	int "Receive USLP MAP ID"
+	default 3
+	range 0 15
+
+config EYE_DEMO_RETRANSMISSION_TIMEOUT_MS
+	int "COP-1 retransmission timeout (ms)"
+	default 500
+	range 1 60000
+
+config EYE_DEMO_FEEDBACK_INTERVAL_MS
+	int "Idle repeated CLCW feedback interval (ms)"
+	default 1000
+	range 1 60000
+
+config EYE_DEMO_MINIMUM_TRANSMIT_INTERVAL_MS
+	int "Minimum USLP route interval (ms)"
+	default 50
+	range 1 1000
+
+config EYE_DEMO_TRANSMISSION_LIMIT
+	int "COP-1 transmission limit"
+	default 12
+	range 1 255
+
+config EYE_DEMO_FARM_WINDOW_WIDTH
+	int "COP-1 FARM window width"
+	default 8
+	range 2 254
+
+config EYE_DEMO_INITIAL_TRANSMIT_SEQUENCE
+	int "Initial transmit sequence"
+	default 0
+	range 0 255
+
+config EYE_DEMO_INITIAL_RECEIVE_SEQUENCE
+	int "Initial receive sequence"
+	default 0
+	range 0 255
+
+choice EYE_DEMO_FAULT
+	prompt "Deterministic USLP route fault"
+	default EYE_DEMO_FAULT_NONE
+
+config EYE_DEMO_FAULT_NONE
+	bool "Disabled"
+
+config EYE_DEMO_FAULT_DROP_DATA
+	bool "Drop first packet-bearing frame during a transfer"
+
+config EYE_DEMO_FAULT_DROP_FEEDBACK
+	bool "Drop first feedback-only frame during a transfer"
+
+config EYE_DEMO_FAULT_WITHHOLD_FEEDBACK
+	bool "Withhold a bounded run of feedback-only frames during a transfer"
+
+endchoice
+
+config EYE_DEMO_FAULT_WITHHOLD_COUNT
+	int "Number of feedback-only frames to withhold"
+	default 12
+	range 1 255
+
 source "Kconfig.zephyr"

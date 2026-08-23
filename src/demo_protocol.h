@@ -7,12 +7,12 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define DEMO_PROTOCOL_VERSION 1u
-#define DEMO_CALLSIGN_LEN 8u
+#define DEMO_PROTOCOL_VERSION    2u
+#define DEMO_CALLSIGN_LEN        8u
 #define DEMO_CAPTURE_COMMAND_LEN 12u
-#define DEMO_COMMAND_STATUS_LEN 16u
-#define DEMO_PEER_STATUS_LEN 44u
-#define DEMO_DEDUP_CAPACITY 8u
+#define DEMO_COMMAND_STATUS_LEN  16u
+#define DEMO_PEER_STATUS_LEN     68u
+#define DEMO_DEDUP_CAPACITY      8u
 
 enum demo_message_type {
 	DEMO_MSG_CAPTURE_AND_RETURN = 1,
@@ -59,6 +59,23 @@ struct demo_peer_status {
 	uint16_t command_status_apid;
 	uint16_t peer_status_apid;
 	char callsign[DEMO_CALLSIGN_LEN];
+	uint16_t local_spacecraft_id;
+	uint16_t peer_spacecraft_id;
+	uint8_t local_source_or_destination;
+	uint8_t peer_source_or_destination;
+	uint8_t transmit_vcid;
+	uint8_t receive_vcid;
+	uint8_t transmit_map_id;
+	uint8_t receive_map_id;
+	uint16_t maximum_frame_length;
+	uint8_t cop1_window_k;
+	uint8_t farm_window_width;
+	uint16_t minimum_transmit_interval_ms;
+	uint16_t retransmission_timeout_ms;
+	uint16_t feedback_interval_ms;
+	uint8_t transmission_limit;
+	uint8_t initial_transmit_sequence;
+	uint8_t initial_receive_sequence;
 };
 
 struct demo_peer_expectation {
@@ -73,6 +90,23 @@ struct demo_peer_expectation {
 	uint16_t command_status_apid;
 	uint16_t peer_status_apid;
 	char peer_callsign[DEMO_CALLSIGN_LEN];
+	uint16_t local_spacecraft_id;
+	uint16_t peer_spacecraft_id;
+	uint8_t local_source_or_destination;
+	uint8_t peer_source_or_destination;
+	uint8_t transmit_vcid;
+	uint8_t receive_vcid;
+	uint8_t transmit_map_id;
+	uint8_t receive_map_id;
+	uint16_t maximum_frame_length;
+	uint8_t cop1_window_k;
+	uint8_t farm_window_width;
+	uint16_t minimum_transmit_interval_ms;
+	uint16_t retransmission_timeout_ms;
+	uint16_t feedback_interval_ms;
+	uint8_t transmission_limit;
+	uint8_t initial_transmit_sequence;
+	uint8_t initial_receive_sequence;
 };
 
 struct demo_dedup_entry {
@@ -87,23 +121,20 @@ struct demo_dedup_cache {
 	size_t next;
 };
 
-int demo_capture_command_encode(const struct demo_capture_command *command,
-				uint8_t *buffer, size_t capacity);
+int demo_capture_command_encode(const struct demo_capture_command *command, uint8_t *buffer,
+				size_t capacity);
 int demo_capture_command_decode(const uint8_t *buffer, size_t length,
 				struct demo_capture_command *command);
-int demo_command_status_encode(const struct demo_command_status *status,
-			       uint8_t *buffer, size_t capacity);
+int demo_command_status_encode(const struct demo_command_status *status, uint8_t *buffer,
+			       size_t capacity);
 int demo_command_status_decode(const uint8_t *buffer, size_t length,
 			       struct demo_command_status *status);
-int demo_peer_status_encode(const struct demo_peer_status *status,
-			    uint8_t *buffer, size_t capacity);
-int demo_peer_status_decode(const uint8_t *buffer, size_t length,
-			    struct demo_peer_status *status);
-enum demo_peer_validation
-demo_peer_status_validate(const struct demo_peer_status *status,
-			  const struct demo_peer_expectation *expected);
-bool demo_dedup_check_and_record(struct demo_dedup_cache *cache,
-				 uint64_t entity_id, uint32_t request_id,
-				 uint64_t now_ms, uint64_t retention_ms);
+int demo_peer_status_encode(const struct demo_peer_status *status, uint8_t *buffer,
+			    size_t capacity);
+int demo_peer_status_decode(const uint8_t *buffer, size_t length, struct demo_peer_status *status);
+enum demo_peer_validation demo_peer_status_validate(const struct demo_peer_status *status,
+						    const struct demo_peer_expectation *expected);
+bool demo_dedup_check_and_record(struct demo_dedup_cache *cache, uint64_t entity_id,
+				 uint32_t request_id, uint64_t now_ms, uint64_t retention_ms);
 uint8_t demo_transfer_percent(uint32_t bytes_transferred, uint32_t file_size);
 #endif /* CCSDS_EYE_DEMO_PROTOCOL_H */

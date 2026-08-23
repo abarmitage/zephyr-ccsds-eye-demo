@@ -1,20 +1,22 @@
 # CCSDS EYE demo
 
 This demo uses two ESP32-S3-EYE boards to capture and exchange camera images
-over acknowledged CCSDS CFDP space *packets* carried over Wi-Fi UDP to simulate noisy, intermittent & slow space radio links.
+over acknowledged CCSDS CFDP. CFDP Space Packets are carried in bidirectional,
+flow-controlled USLP frames over Wi-Fi UDP to simulate a noisy, intermittent,
+slow space-radio link.
 
-The current working demo is packet-based with simple waits to limit the transmission rate to what
-experimentation shows the peer can (mostly) absorb. In CCSDS protocol terms, it only "proves" CFDP. 
+COP-1 retransmits lost USLP frames before CFDP needs to recover missing file
+data. Retransmission details are written to the serial diagnostics; they do not
+replace the main display status. On its initial acquisition after boot, a board
+adopts the peer's clean CLCW Report Value and may send `BC_UNLOCK` if that peer
+is locked. A later sequence mismatch, lockout, or terminal retry exhaustion is
+reported as `LINK ERROR` and requires resetting both boards together. The demo
+does not automatically send `SET_VR`. `TRANSFER FAILED` is reserved for an
+image transfer that actually failed. SDLS is not enabled.
 
-You may occasionally see CFDP go into RECOVERY state. This is intentional - while it requests retransmission of missing packets.
-Usually (but not always) the image file transfer will complete. Occasional failures are part of the demo! 
-
-(with USLP flow control, retransmission of lost frames will be at a lower protocol level and recovery should never be needed)
-
-The intended next steps are:
-
-- use bidirectional flow-controlled USLP frames to carry the packets,
-- add security with SDLS
+Periodic peer-presence packets are sent only while the link and CFDP service
+are idle and the COP-1 Sent Queue is empty. CLCW feedback caused by transfer
+traffic remains immediate.
 
 ## Controls
 
@@ -49,8 +51,8 @@ Set both files to use:
 - the correct netmask and gateway;
 - reciprocal peer addresses and UDP ports.
 
-The example IP addresses must be replaced. The local configuration files are ignored by Git
-so Wi-Fi credentials are not committed.
+The example IP addresses must be replaced. The local configuration files are
+ignored by Git so Wi-Fi credentials are not committed.
 
 ## Build and flash
 
@@ -67,8 +69,8 @@ Flash the built images from the host:
 ```
 
 The first device becomes EYE-1 and the second becomes EYE-2. Stable
-`/dev/serial/by-id/...` paths are preferable when available. Install
-`esptool` with `pipx install esptool` if it is not already present.
+`/dev/serial/by-id/...` paths are preferable when available. Install `esptool`
+with `pipx install esptool` if it is not already present.
 
 If the container can access both serial devices directly, build and flash in
 one step:
