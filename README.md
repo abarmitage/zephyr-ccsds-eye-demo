@@ -7,9 +7,15 @@ intermittent, slow space-radio link. SDLS is not yet used.
 
 COP-1 retransmits any lost or damaged USLP frames before CFDP needs to recover
 missing file data. No channel-coding layer is implemented in this demo (no
-BCH, no R-S, no FECF). Damaged UDP packets would almost always be detected,
-and appear as a missing frame in the flow-controlled sequence, which COP-1
-would recover. CFDP validates the completed image with a file checksum. With
+BCH, no R-S, no FECF). 
+
+> **Note:** A damaged UDP datagram will normally be rejected by the UDP/IP
+> stack and therefore appear to COP-1 as a missing frame in the
+> flow-controlled sequence. COP-1 will then retransmit it. At this layer, the
+> outcome is similar to a frame that channel coding detected but could not
+> correct.
+
+CFDP validates the completed image with a file checksum. With
 COP-1 enabled at USLP frame level, CFDP gap recovery will rarely—if ever—be
 needed. The packet-only version, in which CFDP performs this recovery, is
 preserved by the [`demo-cfdp-packet`](#tagged-demonstration-versions) tag
