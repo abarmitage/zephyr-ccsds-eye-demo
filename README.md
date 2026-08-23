@@ -3,7 +3,7 @@
 This demo uses two ESP32-S3-EYE boards to capture and exchange camera images
 over acknowledged CCSDS CFDP. CFDP Space Packets are carried in bidirectional,
 COP-1 flow-controlled USLP frames over Wi-Fi UDP to simulate a noisy,
-intermittent, slow space-radio link.
+intermittent, slow space-radio link. SDLS is not yet used.
 
 COP-1 retransmits any lost or damaged USLP frames before CFDP needs to recover
 missing file data. No channel-coding layer is implemented in this demo (no
@@ -21,10 +21,11 @@ It's interesting to compare the two configurations:
   COP-1 during transmission. The sender can use a reduced transmit rate
   limitation because the receiver's capacity to absorb frames is enforced by
   COP-1 flow control. This can improve throughput, but comes at a cost of feedback 
-  of the CLCW in returned frames, even if return link is idle.
-- **demo-cfdp-packet** - CFDP automatically requests to fill any "gaps" in the
-  received file. This requires CFDP to maintain a record of any missing areas
-  in the received file, which uses memory if missing packets are highly dispersed.
+  of the CLCW in returned frames, even if the return link is idle.
+- **demo-cfdp-packet** - after splitting the file into packets, and sending,
+  CFDP automatically requests to fill any "gaps" in the received file.
+  This requires CFDP to maintain a record of any missing areas
+  in the received file, which uses memory, especially if missing packets are highly dispersed.
   Furthermore, the sender must impose a higher, fixed, per-packet transmit
   delay to ensure it does not overwhelm the receiver. The value of this delay
   depends on arbitrary platform & link constraints.
@@ -39,7 +40,6 @@ peer is in Lockout state. A later sequence mismatch, lockout, or retry
 exhaustion is reported as `LINK ERROR` (this currently requires resetting both
 boards together). The demo does not automatically send `SET_VR`. `TRANSFER
 FAILED` is reserved for an image transfer that actually failed at CFDP level.
-SDLS is not yet used.
 
 Periodic peer-presence "ping" packets are sent while the link and CFDP service
 are idle and the COP-1 Sent Queue is empty. CLCW feedback caused by transfer
