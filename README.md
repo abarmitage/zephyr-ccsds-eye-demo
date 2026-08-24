@@ -124,7 +124,7 @@ It's interesting to compare the two configurations:
   delay to ensure it does not overwhelm the receiver. The value of this delay
   depends on arbitrary platform & link constraints.
 
-Clearly, flow-controlled is preferable, although in the demo, it mostly "hides"
+Clearly, flow-controlled is preferable, although in the demo, it "hides"
 CFDP's ability to recover missing sections of a file.
 
 ## Initial Startup Approach
