@@ -29,7 +29,9 @@ not replace the last valid image.
 ![ESP32-S3-EYE button locations and display layout](assets/eye-demo-guide.svg)
 
 The display is "egocentric" with the current board on the left and remote board
-on the right. EYE-1 is shown in blue, EYE-2 is always orange
+on the right. 
+
+EYE-1 is shown in blue, EYE-2 is always orange
 
 ## Configure
 
