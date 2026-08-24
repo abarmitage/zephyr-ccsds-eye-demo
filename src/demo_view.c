@@ -35,3 +35,23 @@ bool demo_view_prepare_action(struct demo_view_model *model)
 	}
 	return false;
 }
+
+bool demo_view_enter_link(struct demo_view_model *model)
+{
+	__ASSERT_NO_MSG(model != NULL);
+	if (model->view != DEMO_VIEW_PROTOCOL) {
+		return false;
+	}
+	model->view = DEMO_VIEW_LINK;
+	return true;
+}
+
+bool demo_view_leave_link(struct demo_view_model *model)
+{
+	__ASSERT_NO_MSG(model != NULL);
+	if (model->view != DEMO_VIEW_LINK) {
+		return false;
+	}
+	model->view = DEMO_VIEW_PROTOCOL;
+	return true;
+}

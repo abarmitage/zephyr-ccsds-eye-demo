@@ -39,6 +39,7 @@ LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 #define WORKER_IDLE_MS               2u
 #define CFDP_POLL_MS                 10u
 #define LINK_SNAPSHOT_MS             5000u
+#define LINK_UI_SNAPSHOT_MS          250u
 #define PROGRESS_UI_PERIOD_MS        100u
 #define PRE_CAPTURE_QUIET_PERIOD_MS  250u
 #define POST_CAPTURE_QUIET_PERIOD_MS 250u
@@ -81,6 +82,9 @@ BUILD_ASSERT(CFDP_MAX_SYNCHRONOUS_PACKETS == 117u,
 enum action_type {
 	ACTION_LOCAL_SEND,
 	ACTION_REMOTE_REQUEST,
+	ACTION_LINK_UNLOCK,
+	ACTION_LINK_SYNC_TX,
+	ACTION_LINK_SET_VR,
 };
 
 enum network_event_type {
@@ -182,6 +186,7 @@ static uint64_t peer_last_seen_ms;
 static uint64_t next_status_ms;
 static uint64_t next_cfdp_poll_ms;
 static uint64_t next_link_snapshot_ms;
+static uint64_t next_link_ui_snapshot_ms;
 static uint32_t packet_sequence;
 static uint32_t next_request_id = 1u;
 static uint32_t pending_request_id;
@@ -193,6 +198,9 @@ static struct progress_update rx_progress;
 static struct callback_progress_snapshot callback_progress[2];
 static struct callback_terminal_snapshot callback_terminal[2];
 static struct k_spinlock callback_progress_lock;
+static struct demo_link_snapshot link_snapshot;
+static struct k_spinlock link_snapshot_lock;
+static bool link_snapshot_valid;
 static atomic_t rx_queue_drops;
 static atomic_t rx_queue_used;
 static atomic_t rx_queue_peak;
@@ -211,7 +219,6 @@ static uint32_t validated_image_commits;
 static int terminal_route_error;
 static bool fault_injected;
 static uint32_t link_failure_events;
-static int pending_link_error;
 static bool initial_link_acquisition = true;
 static struct demo_image_object image_objects[DEMO_IMAGE_SLOT_COUNT]
 	__attribute__((section(".ext_ram.bss.eye_images"), aligned(32)));
@@ -225,6 +232,7 @@ static void send_peer_status(void);
 static void process_progress_snapshots(uint64_t now);
 static void service_peer_ingress(uint64_t now);
 static void trace_link_snapshot(const char *reason);
+static void publish_link_snapshot(void);
 static void ui_event(enum demo_ui_event_type type, uint32_t request_id,
 		     int32_t detail);
 static struct k_mutex image_lock;
@@ -264,7 +272,7 @@ static int advance_link_sync(uint64_t now, int peer_rc,
 	if (link_sync_phase == LINK_SYNC_FAILED) {
 		return peer_rc;
 	}
-	if (peer_rc == -ETIMEDOUT || peer_rc == -ESHUTDOWN || peer_rc == -ERANGE) {
+	if (peer_rc == -ETIMEDOUT || peer_rc == -ESHUTDOWN) {
 		peer_ready = false;
 		link_failure_events++;
 		link_sync_phase = LINK_SYNC_FAILED;
@@ -640,16 +648,16 @@ static void service_peer_ingress(uint64_t now)
 	struct rx_datagram datagram;
 
 	while (k_msgq_get(&rx_queue, &datagram, K_NO_WAIT) == 0) {
-		int rc;
-
 		atomic_dec(&rx_queue_used);
 		if (link_sync_phase == LINK_SYNC_FAILED) {
 			continue;
 		}
-		rc = ccsds_uslp_peer_receive(&peer, datagram.data, datagram.length, now);
-		if (rc == -ERANGE && pending_link_error == 0) {
-			pending_link_error = rc;
-		}
+		/* A delayed or reordered UDP datagram can contain an obsolete CLCW.
+		 * The peer rejects and counts its out-of-window ReportValue, while the
+		 * FOP remains unchanged.  Lack of subsequent acknowledgement progress
+		 * is detected by the normal COP-1 retry-exhaustion path.
+		 */
+		(void)ccsds_uslp_peer_receive(&peer, datagram.data, datagram.length, now);
 	}
 }
 
@@ -1185,12 +1193,70 @@ static void process_cfdp_events(uint64_t now)
 	flush_progress(&rx_progress, DEMO_TRANSFER_RX, now, false);
 }
 
+static int process_link_action(enum action_type action, uint64_t now)
+{
+	struct ccsds_uslp_peer_snapshot snapshot;
+	int rc;
+
+	if (!protocol_ready || operation_active || cfdp_service.entity.receiver.active ||
+	    pending_request_deadline_ms != 0u) {
+		return -EBUSY;
+	}
+	ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
+	if ((snapshot.outstanding_frames != 0u || snapshot.queued_packets != 0u ||
+	     atomic_get(&rx_queue_used) != 0) &&
+	    !snapshot.terminal_failure && link_sync_phase != LINK_SYNC_FAILED) {
+		return -EBUSY;
+	}
+	if (action == ACTION_LINK_SYNC_TX) {
+		rc = start_link_sync(now, true);
+	} else {
+		if (snapshot.terminal_failure || link_sync_phase == LINK_SYNC_FAILED) {
+			struct ccsds_uslp_peer_config config = peer_config;
+
+			config.initial_transmit_sequence = snapshot.transmit_sequence;
+			config.initial_receive_sequence = snapshot.receive_sequence;
+			rc = ccsds_uslp_peer_init(&peer, &config, now);
+			if (rc != 0) {
+				return rc;
+			}
+		}
+		if (action == ACTION_LINK_UNLOCK) {
+			rc = ccsds_uslp_peer_send_unlock(&peer);
+		} else {
+			rc = ccsds_uslp_peer_send_set_vr(&peer, snapshot.transmit_sequence);
+		}
+		if (rc == 0) {
+			link_sync_phase = LINK_SYNC_UNLOCK;
+		}
+	}
+	if (rc == 0) {
+		peer_ready = false;
+		peak_outstanding = 0u;
+		LOG_WRN("USLP operator action=%u queued at V(S)=%u report=%u",
+			(unsigned int)action, snapshot.transmit_sequence,
+			snapshot.last_clcw_report);
+	}
+	return rc;
+}
+
 static void process_actions(uint64_t now)
 {
 	struct action_message action;
 
 	while (k_msgq_get(&action_queue, &action, K_NO_WAIT) == 0) {
-		if (action.type == ACTION_LOCAL_SEND) {
+		if (action.type == ACTION_LINK_UNLOCK || action.type == ACTION_LINK_SYNC_TX ||
+		    action.type == ACTION_LINK_SET_VR) {
+			enum demo_link_action ui_action =
+				action.type == ACTION_LINK_UNLOCK
+					? DEMO_LINK_UNLOCK
+					: (action.type == ACTION_LINK_SYNC_TX ? DEMO_LINK_SYNC_TX
+									 : DEMO_LINK_SET_VR);
+			int rc = process_link_action(action.type, now);
+
+			ui_event(DEMO_UI_LINK_ACTION_RESULT, (uint32_t)ui_action, rc);
+			publish_link_snapshot();
+		} else if (action.type == ACTION_LOCAL_SEND) {
 			const struct send_operation operation = {
 				.destination_entity_id = CONFIG_EYE_DEMO_PEER_ENTITY_ID,
 				.origin = OPERATION_LOCAL_BUTTON,
@@ -1249,6 +1315,66 @@ static void trace_receiver_closure(void)
 	}
 	receiver_wait_logged = waiting;
 	receiver_retry_logged = retries;
+}
+
+static void publish_link_snapshot(void)
+{
+	struct ccsds_uslp_peer_snapshot peer_state;
+	struct ccsds_udp_stats udp_stats;
+	struct demo_link_snapshot next;
+	k_spinlock_key_t key;
+
+	ccsds_uslp_peer_get_snapshot(&peer, &peer_state);
+	ccsds_udp_get_stats(&udp, &udp_stats);
+	next = (struct demo_link_snapshot){
+		.new_frames = peer_state.stats.new_frames_emitted,
+		.retransmitted_frames = peer_state.stats.retransmitted_frames,
+		.packet_frames = peer_state.stats.packet_frames_emitted,
+		.feedback_frames = peer_state.stats.feedback_frames_emitted,
+		.received_frames = peer_state.stats.received_frames_accepted,
+		.duplicate_frames = peer_state.stats.received_frames_duplicated,
+		.rejected_frames = peer_state.stats.received_frames_rejected,
+		.dispatched_packets = peer_state.stats.packets_dispatched,
+		.clcws = peer_state.stats.clcws_accepted,
+		.acknowledgements = peer_state.stats.acknowledgements,
+		.timeout_events = peer_state.stats.timeout_events,
+		.retry_exhaustion = peer_state.stats.retry_exhaustion,
+		.wait_events = peer_state.stats.wait_events,
+		.lockout_events = peer_state.stats.lockout_events,
+		.terminal_failures = peer_state.stats.terminal_failures,
+		.submit_backpressure = submit_backpressure,
+		.cfdp_naks_sent = cfdp_naks_sent,
+		.cfdp_naks_received = cfdp_naks_received,
+		.cfdp_retransmissions = cfdp_retransmissions,
+		.route_failures = peer_state.stats.route_failures,
+		.fop_state = (uint8_t)peer_state.fop_state,
+		.farm_state = (uint8_t)peer_state.farm_state,
+		.transmit_sequence = peer_state.transmit_sequence,
+		.expected_acknowledgement = peer_state.expected_acknowledgement,
+		.receive_sequence = peer_state.receive_sequence,
+		.report_value = peer_state.last_clcw_report,
+		.report_advance = (uint8_t)peer_state.last_clcw_advance,
+		.transmission_count = peer_state.transmission_count,
+		.outstanding_frames = (uint8_t)peer_state.outstanding_frames,
+		.peak_outstanding = (uint8_t)peak_outstanding,
+		.ingress_used = (uint8_t)atomic_get(&rx_queue_used),
+		.ingress_peak = (uint8_t)atomic_get(&rx_queue_peak),
+		.ingress_capacity = RX_QUEUE_DEPTH,
+		.peer_available = peer_ready,
+		.cfdp_tx_active = cfdp_service.entity.sender.active,
+		.cfdp_rx_active = cfdp_service.entity.receiver.active,
+		.terminal_failure = peer_state.terminal_failure,
+		.peer_error = peer_state.stats.last_error,
+		.route_error = terminal_route_error,
+		.udp_error = udp_stats.last_error,
+		.ingress_overflow = (uint32_t)atomic_get(&rx_queue_drops),
+		.injected_faults = injected_faults,
+		.submit_terminal_errors = submit_terminal_errors,
+	};
+	key = k_spin_lock(&link_snapshot_lock);
+	link_snapshot = next;
+	link_snapshot_valid = true;
+	k_spin_unlock(&link_snapshot_lock, key);
 }
 
 static void trace_link_snapshot(const char *reason)
@@ -1451,6 +1577,7 @@ static void worker(void *p1, void *p2, void *p3)
 					next_status_ms = now;
 					next_cfdp_poll_ms = now;
 					next_link_snapshot_ms = now;
+					next_link_ui_snapshot_ms = now;
 					ui_event(DEMO_UI_NETWORK_READY, 0u, 0);
 					LOG_INF("network ready %s:%u peer %s:%u",
 						CONFIG_EYE_DEMO_LOCAL_IPV4,
@@ -1495,10 +1622,6 @@ static void worker(void *p1, void *p2, void *p3)
 				int peer_rc = ccsds_uslp_peer_tick(&peer, now);
 				struct ccsds_uslp_peer_snapshot snapshot;
 
-				if (pending_link_error != 0) {
-					peer_rc = pending_link_error;
-					pending_link_error = 0;
-				}
 				ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
 				(void)advance_link_sync(now, peer_rc, &snapshot);
 				ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
@@ -1531,6 +1654,10 @@ static void worker(void *p1, void *p2, void *p3)
 			if (now >= next_link_snapshot_ms) {
 				trace_link_snapshot("periodic");
 				next_link_snapshot_ms = now + LINK_SNAPSHOT_MS;
+			}
+			if (now >= next_link_ui_snapshot_ms) {
+				publish_link_snapshot();
+				next_link_ui_snapshot_ms = now + LINK_UI_SNAPSHOT_MS;
 			}
 		}
 		(void)k_sem_take(&worker_wake, K_MSEC(WORKER_IDLE_MS));
@@ -1579,9 +1706,51 @@ bool demo_service_queue_remote_request(void)
 	return rc == 0;
 }
 
+bool demo_service_queue_link_action(enum demo_link_action action)
+{
+	struct action_message message;
+	int rc;
+
+	switch (action) {
+	case DEMO_LINK_UNLOCK:
+		message.type = ACTION_LINK_UNLOCK;
+		break;
+	case DEMO_LINK_SYNC_TX:
+		message.type = ACTION_LINK_SYNC_TX;
+		break;
+	case DEMO_LINK_SET_VR:
+		message.type = ACTION_LINK_SET_VR;
+		break;
+	default:
+		return false;
+	}
+	rc = k_msgq_put(&action_queue, &message, K_NO_WAIT);
+	if (rc == 0) {
+		k_sem_give(&worker_wake);
+	}
+	return rc == 0;
+}
+
 bool demo_service_get_ui_event(struct demo_ui_event *event)
 {
 	return k_msgq_get(&ui_queue, event, K_NO_WAIT) == 0;
+}
+
+bool demo_service_get_link_snapshot(struct demo_link_snapshot *snapshot)
+{
+	k_spinlock_key_t key;
+	bool valid;
+
+	if (snapshot == NULL) {
+		return false;
+	}
+	key = k_spin_lock(&link_snapshot_lock);
+	valid = link_snapshot_valid;
+	if (valid) {
+		*snapshot = link_snapshot;
+	}
+	k_spin_unlock(&link_snapshot_lock, key);
+	return valid;
 }
 
 int demo_service_acquire_display_image(const struct demo_image_object **object)

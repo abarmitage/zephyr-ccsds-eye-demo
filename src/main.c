@@ -59,7 +59,30 @@ int main(void)
 		while (k_msgq_get(&key_events, &key, K_NO_WAIT) == 0) {
 			LOG_INF("input code=%u value=%d", key.code, key.value);
 			demo_ui_handle_key(key.code, key.value);
-			if (key.value != 0 && key.code == INPUT_KEY_MENU) {
+			if (key.value != 0 && demo_ui_link_active()) {
+				enum demo_link_action action = 0;
+				bool has_action = true;
+
+				if (key.code == INPUT_KEY_DOWN) {
+					demo_ui_leave_link();
+					has_action = false;
+				} else if (key.code == INPUT_KEY_MENU) {
+					action = DEMO_LINK_UNLOCK;
+				} else if (key.code == INPUT_KEY_PLAY) {
+					action = DEMO_LINK_SET_VR;
+				} else if (key.code == INPUT_KEY_UP) {
+					action = DEMO_LINK_SYNC_TX;
+				} else {
+					has_action = false;
+				}
+				if (has_action) {
+					if (demo_service_queue_link_action(action)) {
+						demo_ui_report_link_queued(action);
+					} else {
+						LOG_WRN("link action queue full");
+					}
+				}
+			} else if (key.value != 0 && key.code == INPUT_KEY_MENU) {
 				demo_ui_prepare_action();
 				if (!demo_service_queue_local_send()) {
 					demo_ui_report_busy();
@@ -69,9 +92,10 @@ int main(void)
 				if (!demo_service_queue_remote_request()) {
 					demo_ui_report_busy();
 				}
-			} else if (key.value != 0 &&
-				   (key.code == INPUT_KEY_UP || key.code == INPUT_KEY_DOWN)) {
+			} else if (key.value != 0 && key.code == INPUT_KEY_UP) {
 				demo_ui_toggle_show();
+			} else if (key.value != 0 && key.code == INPUT_KEY_DOWN) {
+				demo_ui_enter_link();
 			}
 		}
 		while (demo_service_get_ui_event(&ui_event)) {

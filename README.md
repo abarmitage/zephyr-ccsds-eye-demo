@@ -17,9 +17,11 @@ Wait until both displays have registered to Wi-Fi and show `READY / PEER OK`.
   other board.
 - **REQUEST** (lower-left): ask the other board to capture a fresh image and
   send it back.
-- **SHOW** (either right-side button): display the latest valid image, whether
+- **SHOW** (upper-right): display the latest valid image, whether
   it was captured locally or received from the other board. Press again to
   return to the protocol view.
+- **LINK** (lower-right): show link and recovery status. Press **BACK** to
+  return.
 
 `SHOW` reports `NO IMAGE` until an image is available. A failed transfer does
 not replace the last valid image.
@@ -85,8 +87,8 @@ separate final step.
 
 ## Diagnostics
 
-Retransmission details are written to the serial diagnostics log; they do not
-replace the main display status.
+The **LINK** screen shows USLP/COP-1, link, and CFDP status and counters. More
+detailed diagnostics are written to the serial log.
 
 ## Protocol Comparison & Tradeoff
 
@@ -135,8 +137,8 @@ any differences automatically on first start.
 On initial CLCW acquisition after boot, a board adopts the peer's CLCW Report Value 
 and may send `BC_UNLOCK` if that peer is in Lockout state. 
 
-A later sequence mismatch, lockout, or retry exhaustion is reported as `LINK ERROR` 
-(this currently requires resetting both boards together). 
+A later lockout or retry exhaustion is reported as `LINK ERROR`. The **LINK**
+screen provides manual unlock and sequence synchronization controls.
 
 The demo does not automatically send `SET_VR`. `TRANSFER FAILED` is reserved for 
 an image transfer that actually failed at CFDP level.

@@ -35,7 +35,7 @@
   <title
      id="title">ESP32-S3-EYE demo controls and screen</title>
   <desc
-     id="desc">A portrait EYE board with a large camera above a square display. Send and Request buttons sit to the left of the camera, and both buttons to its right toggle Show.</desc>
+     id="desc">A portrait EYE board with a large camera above a square display. Send and Request buttons sit to the left of the camera; Show and Link buttons sit to its right.</desc>
   <defs
      id="defs8">
     <radialGradient
@@ -312,14 +312,14 @@
      font-size="16"
      font-weight="700"
      fill="#18232e"
-     id="text25">SHOW</text>
+     id="text25">LINK</text>
   <text
      x="594"
      y="192"
      font-family="sans-serif"
      font-size="12"
      fill="#52616d"
-     id="text26">TOGGLE</text>
+     id="text26">STATUS</text>
   <line
      x1="571"
      y1="177"
@@ -516,12 +516,20 @@
      id="text39">&lt; REQUEST</text>
   <text
      x="509"
-     y="456"
+     y="449"
      text-anchor="end"
      font-family="monospace"
      font-size="11"
      fill="#e1e9f0"
      id="text40">SHOW &gt;</text>
+  <text
+     x="509"
+     y="464"
+     text-anchor="end"
+     font-family="monospace"
+     font-size="11"
+     fill="#e1e9f0"
+     id="text-link">LINK &gt;</text>
   <text
      x="380"
      y="485"

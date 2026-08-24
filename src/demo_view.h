@@ -8,6 +8,7 @@
 enum demo_view {
 	DEMO_VIEW_PROTOCOL,
 	DEMO_VIEW_IMAGE,
+	DEMO_VIEW_LINK,
 };
 
 enum demo_show_result {
@@ -23,5 +24,7 @@ struct demo_view_model {
 void demo_view_init(struct demo_view_model *model);
 enum demo_show_result demo_view_toggle_show(struct demo_view_model *model, bool image_available);
 bool demo_view_prepare_action(struct demo_view_model *model);
+bool demo_view_enter_link(struct demo_view_model *model);
+bool demo_view_leave_link(struct demo_view_model *model);
 
 #endif /* CCSDS_EYE_DEMO_VIEW_H */

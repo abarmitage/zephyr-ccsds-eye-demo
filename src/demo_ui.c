@@ -15,6 +15,8 @@
 
 #include <lvgl.h>
 
+#include <ccsds/ccsds_uslp_peer.h>
+
 LOG_MODULE_REGISTER(eye_ui, CONFIG_LOG_DEFAULT_LEVEL);
 
 #define SCREEN_WIDTH          240
@@ -24,6 +26,7 @@ LOG_MODULE_REGISTER(eye_ui, CONFIG_LOG_DEFAULT_LEVEL);
 #define TRANSFER_ANIMATION_MS 900U
 #define TC_ANIMATION_MS       250U
 #define COMPLETION_HOLD_MS    3000U
+#define LINK_REFRESH_MS       1000U
 
 enum demo_state {
 	DEMO_BOOT,
@@ -51,6 +54,21 @@ static const lv_color_t color_red = LV_COLOR_MAKE(226, 82, 76);
 
 static lv_obj_t *status_label;
 static lv_obj_t *protocol_screen;
+static lv_obj_t *link_screen;
+static lv_obj_t *link_peer_label;
+static lv_obj_t *link_peer_report_label;
+static lv_obj_t *link_local_label;
+static lv_obj_t *link_cfdp_state_label;
+static lv_obj_t *link_cop1_summary_label;
+static lv_obj_t *link_recovery_label;
+static lv_obj_t *link_timeout_label;
+static lv_obj_t *link_duplicate_label;
+static lv_obj_t *link_error_label;
+static lv_obj_t *link_drop_label;
+static lv_obj_t *link_terminal_label;
+static lv_obj_t *link_cfdp_label;
+static lv_obj_t *link_cfdp_retx_label;
+static lv_obj_t *link_result_label;
 static const struct demo_image_object *displayed_image;
 static bool image_redraw_pending;
 static struct demo_view_model view_model;
@@ -70,6 +88,21 @@ static bool cfdp_rx_active;
 static bool tc_incoming;
 static bool completion_pending;
 static enum demo_transfer_direction completion_direction;
+static uint32_t next_link_refresh_ms;
+
+static const char *link_action_name(enum demo_link_action action)
+{
+	switch (action) {
+	case DEMO_LINK_UNLOCK:
+		return "UNLOCK";
+	case DEMO_LINK_SYNC_TX:
+		return "SYNC";
+	case DEMO_LINK_SET_VR:
+		return "SET VR";
+	default:
+		return "LINK";
+	}
+}
 
 static lv_obj_t *solid_obj(lv_obj_t *parent, int x, int y, int width, int height, lv_color_t color)
 {
@@ -207,6 +240,226 @@ static void show_completion(enum demo_transfer_direction direction, uint32_t now
 	}
 }
 
+static void refresh_link_screen(void)
+{
+	struct demo_link_snapshot snapshot;
+	const char *peer_text;
+	const char *local_text;
+	const char *cfdp_text;
+	lv_color_t peer_color;
+	lv_color_t local_color;
+
+	if (!demo_service_get_link_snapshot(&snapshot)) {
+		lv_label_set_text(link_peer_label, "PEER   WAITING");
+		lv_label_set_text(link_peer_report_label, "V(R)  --");
+		lv_label_set_text(link_local_label, "LOCAL  WAITING");
+		lv_label_set_text(link_cfdp_state_label, "CFDP   WAITING");
+		lv_label_set_text(link_cop1_summary_label, "WIN --/-  NNR --");
+		lv_label_set_text(link_timeout_label, "TMOUT --");
+		lv_label_set_text(link_duplicate_label, "REJ --  DUP --");
+		lv_label_set_text(link_drop_label, "DROP --");
+		lv_label_set_text(link_terminal_label, "TERM --");
+		lv_label_set_text(link_cfdp_retx_label, "RETX --");
+		return;
+	}
+	if (snapshot.terminal_failure) {
+		peer_text = "FAILED";
+		peer_color = color_red;
+	} else if (snapshot.fop_state == CCSDS_USLP_FOP_INITIAL) {
+		peer_text = "LOCKOUT";
+		peer_color = color_red;
+	} else if (snapshot.fop_state == CCSDS_USLP_FOP_RETRANSMIT_WITH_WAIT) {
+		peer_text = "WAIT/RETX";
+		peer_color = color_amber;
+	} else if (snapshot.fop_state == CCSDS_USLP_FOP_RETRANSMIT_WITHOUT_WAIT) {
+		peer_text = "RETRANSMIT";
+		peer_color = color_amber;
+	} else if (snapshot.fop_state == CCSDS_USLP_FOP_INITIALIZING_WITHOUT_BC) {
+		peer_text = "SYNC";
+		peer_color = color_amber;
+	} else if (snapshot.fop_state == CCSDS_USLP_FOP_INITIALIZING_WITH_BC) {
+		peer_text = "CONTROL";
+		peer_color = color_amber;
+	} else if (!snapshot.peer_available) {
+		peer_text = "UNAVAILABLE";
+		peer_color = color_muted;
+	} else {
+		peer_text = "OK";
+		peer_color = color_green;
+	}
+	if (snapshot.farm_state == CCSDS_USLP_FARM_LOCKOUT) {
+		local_text = "LOCKOUT";
+		local_color = color_red;
+	} else if (snapshot.farm_state == CCSDS_USLP_FARM_WAIT) {
+		local_text = "WAIT";
+		local_color = color_amber;
+	} else {
+		local_text = "OPEN";
+		local_color = color_green;
+	}
+	cfdp_text = snapshot.cfdp_tx_active && snapshot.cfdp_rx_active
+			? "DUPLEX"
+			: (snapshot.cfdp_tx_active ? "TX"
+						   : (snapshot.cfdp_rx_active ? "RX" : "IDLE"));
+	lv_label_set_text_fmt(link_peer_label, "PEER   %s", peer_text);
+	lv_obj_set_style_text_color(link_peer_label, peer_color, 0);
+	lv_label_set_text_fmt(link_peer_report_label, "V(R) %3u", snapshot.report_value);
+	lv_obj_set_style_text_color(link_peer_report_label, peer_color, 0);
+	lv_label_set_text_fmt(link_local_label, "LOCAL  %-8s VS %3u VR %3u", local_text,
+			      snapshot.transmit_sequence, snapshot.receive_sequence);
+	lv_obj_set_style_text_color(link_local_label, local_color, 0);
+	lv_label_set_text_fmt(link_cfdp_state_label, "CFDP   %s", cfdp_text);
+	lv_obj_set_style_text_color(link_cfdp_state_label,
+				 snapshot.cfdp_tx_active || snapshot.cfdp_rx_active ? color_cyan
+										    : color_muted,
+				 0);
+	lv_label_set_text_fmt(link_recovery_label,
+			      "RETX %u  WAIT %u\n"
+			      "LKOUT %u  EXH %u",
+			      snapshot.retransmitted_frames, snapshot.wait_events,
+			      snapshot.lockout_events, snapshot.retry_exhaustion);
+	lv_label_set_text_fmt(link_cop1_summary_label, "WIN %u/%u  NNR %u",
+			      snapshot.outstanding_frames, CCSDS_USLP_PEER_WINDOW_K,
+			      snapshot.expected_acknowledgement);
+	lv_label_set_text_fmt(link_timeout_label, "TMOUT %u", snapshot.timeout_events);
+	lv_label_set_text_fmt(link_duplicate_label, "REJ %u  DUP %u",
+			      snapshot.rejected_frames, snapshot.duplicate_frames);
+	lv_label_set_text_fmt(link_error_label,
+			      "QUEUE PEAK %u/%u\n"
+			      "ROUTE %u   UDP %d",
+			      snapshot.ingress_peak, snapshot.ingress_capacity,
+			      snapshot.route_failures, snapshot.udp_error);
+	lv_label_set_text_fmt(link_drop_label, "DROP %u", snapshot.ingress_overflow);
+	lv_label_set_text_fmt(link_terminal_label, "TERM %u",
+			      snapshot.terminal_failures);
+	lv_label_set_text_fmt(link_cfdp_label, "NAK TX/RX %u/%u",
+			      snapshot.cfdp_naks_sent, snapshot.cfdp_naks_received);
+	lv_label_set_text_fmt(link_cfdp_retx_label, "RETX %u",
+			      snapshot.cfdp_retransmissions);
+}
+
+static void create_link_screen(void)
+{
+	lv_obj_t *label;
+
+	link_screen = lv_obj_create(NULL);
+	lv_obj_set_style_bg_color(link_screen, color_bg, 0);
+	lv_obj_set_style_bg_opa(link_screen, LV_OPA_COVER, 0);
+	lv_obj_set_style_text_color(link_screen, color_text, 0);
+	lv_obj_set_style_pad_all(link_screen, 0, 0);
+	lv_obj_clear_flag(link_screen, LV_OBJ_FLAG_SCROLLABLE);
+
+	label = lv_label_create(link_screen);
+	lv_label_set_text(label, CONFIG_EYE_DEMO_CALLSIGN);
+	lv_obj_set_style_text_color(label, local_accent, 0);
+	lv_obj_set_pos(label, 8, 7);
+
+	label = lv_label_create(link_screen);
+	lv_label_set_text(label, "LINK STATUS");
+	lv_obj_align(label, LV_ALIGN_TOP_MID, 0, 7);
+
+	(void)solid_obj(link_screen, 0, 22, SCREEN_WIDTH, 1, color_panel);
+
+	link_peer_label = lv_label_create(link_screen);
+	lv_obj_set_width(link_peer_label, 160);
+	lv_obj_set_pos(link_peer_label, 4, 28);
+	lv_label_set_text(link_peer_label, "PEER   WAITING");
+
+	link_peer_report_label = lv_label_create(link_screen);
+	lv_label_set_text(link_peer_report_label, "V(R)  --");
+	lv_obj_align(link_peer_report_label, LV_ALIGN_TOP_RIGHT, -4, 28);
+
+	link_local_label = lv_label_create(link_screen);
+	lv_obj_set_width(link_local_label, 232);
+	lv_obj_set_pos(link_local_label, 4, 40);
+	lv_label_set_text(link_local_label, "LOCAL  WAITING");
+
+	link_cfdp_state_label = lv_label_create(link_screen);
+	lv_obj_set_width(link_cfdp_state_label, 232);
+	lv_obj_set_pos(link_cfdp_state_label, 4, 52);
+	lv_label_set_text(link_cfdp_state_label, "CFDP   WAITING");
+
+	label = lv_label_create(link_screen);
+	lv_label_set_text(label, "COP-1");
+	lv_obj_set_style_text_color(label, color_amber, 0);
+	lv_obj_set_pos(label, 4, 68);
+
+	link_cop1_summary_label = lv_label_create(link_screen);
+	lv_label_set_text(link_cop1_summary_label, "WIN --/-  NNR --");
+	lv_obj_set_style_text_color(link_cop1_summary_label, color_amber, 0);
+	lv_obj_align(link_cop1_summary_label, LV_ALIGN_TOP_RIGHT, -4, 68);
+
+	link_recovery_label = lv_label_create(link_screen);
+	lv_obj_set_width(link_recovery_label, 232);
+	lv_obj_set_pos(link_recovery_label, 4, 80);
+	lv_label_set_text(link_recovery_label, "No recovery activity");
+
+	link_timeout_label = lv_label_create(link_screen);
+	lv_label_set_text(link_timeout_label, "TMOUT --");
+	lv_obj_align(link_timeout_label, LV_ALIGN_TOP_RIGHT, -4, 80);
+
+	link_duplicate_label = lv_label_create(link_screen);
+	lv_label_set_text(link_duplicate_label, "REJ --  DUP --");
+	lv_obj_align(link_duplicate_label, LV_ALIGN_TOP_RIGHT, -4, 90);
+
+	label = lv_label_create(link_screen);
+	lv_label_set_text(label, "LINK");
+	lv_obj_set_style_text_color(label, color_red, 0);
+	lv_obj_set_pos(label, 4, 104);
+
+	link_error_label = lv_label_create(link_screen);
+	lv_obj_set_width(link_error_label, 232);
+	lv_obj_set_pos(link_error_label, 4, 116);
+	lv_label_set_text(link_error_label, "No link errors");
+
+	link_drop_label = lv_label_create(link_screen);
+	lv_label_set_text(link_drop_label, "DROP --");
+	lv_obj_align(link_drop_label, LV_ALIGN_TOP_RIGHT, -4, 116);
+
+	link_terminal_label = lv_label_create(link_screen);
+	lv_label_set_text(link_terminal_label, "TERM --");
+	lv_obj_align(link_terminal_label, LV_ALIGN_TOP_RIGHT, -4, 126);
+
+	label = lv_label_create(link_screen);
+	lv_label_set_text(label, "CFDP");
+	lv_obj_set_style_text_color(label, color_cyan, 0);
+	lv_obj_set_pos(label, 4, 140);
+
+	link_cfdp_label = lv_label_create(link_screen);
+	lv_obj_set_width(link_cfdp_label, 232);
+	lv_obj_set_pos(link_cfdp_label, 4, 152);
+	lv_label_set_text(link_cfdp_label, "NAK TX/RX 0/0");
+
+	link_cfdp_retx_label = lv_label_create(link_screen);
+	lv_label_set_text(link_cfdp_retx_label, "RETX --");
+	lv_obj_align(link_cfdp_retx_label, LV_ALIGN_TOP_RIGHT, -4, 152);
+
+	link_result_label = lv_label_create(link_screen);
+	lv_obj_set_width(link_result_label, 232);
+	lv_obj_set_style_text_align(link_result_label, LV_TEXT_ALIGN_CENTER, 0);
+	lv_obj_set_style_text_color(link_result_label, color_muted, 0);
+	lv_obj_set_pos(link_result_label, 4, 174);
+	lv_label_set_text(link_result_label, "");
+
+	(void)solid_obj(link_screen, 0, 190, SCREEN_WIDTH, 1, color_panel);
+
+	label = lv_label_create(link_screen);
+	lv_label_set_text(label, "< UNLOCK");
+	lv_obj_set_pos(label, 4, 191);
+
+	label = lv_label_create(link_screen);
+	lv_label_set_text(label, "< SET VR");
+	lv_obj_set_pos(label, 4, 206);
+
+	label = lv_label_create(link_screen);
+	lv_label_set_text(label, "SYNC >");
+	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -4, 191);
+
+	label = lv_label_create(link_screen);
+	lv_label_set_text(label, "BACK >");
+	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -4, 206);
+}
+
 void demo_ui_init(void)
 {
 	lv_obj_t *screen = lv_screen_active();
@@ -307,7 +560,11 @@ void demo_ui_init(void)
 
 	label = lv_label_create(screen);
 	lv_label_set_text(label, "SHOW >");
-	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -4, 196);
+	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -4, 191);
+
+	label = lv_label_create(screen);
+	lv_label_set_text(label, "LINK >");
+	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -4, 206);
 
 	label = lv_label_create(screen);
 	lv_label_set_text(label, CONFIG_EYE_DEMO_LOCAL_IPV4);
@@ -315,6 +572,7 @@ void demo_ui_init(void)
 	lv_obj_align(label, LV_ALIGN_BOTTOM_MID, 0, -4);
 
 	set_state(DEMO_BOOT, k_uptime_get_32());
+	create_link_screen();
 }
 
 static void leave_image_view(void)
@@ -333,6 +591,36 @@ static void leave_image_view(void)
 bool demo_ui_image_active(void)
 {
 	return displayed_image != NULL;
+}
+
+bool demo_ui_link_active(void)
+{
+	return view_model.view == DEMO_VIEW_LINK;
+}
+
+void demo_ui_enter_link(void)
+{
+	if (!demo_view_enter_link(&view_model)) {
+		return;
+	}
+	refresh_link_screen();
+	next_link_refresh_ms = k_uptime_get_32() + LINK_REFRESH_MS;
+	lv_screen_load(link_screen);
+}
+
+void demo_ui_leave_link(void)
+{
+	if (!demo_view_leave_link(&view_model)) {
+		return;
+	}
+	lv_screen_load(protocol_screen);
+	lv_obj_invalidate(protocol_screen);
+}
+
+void demo_ui_report_link_queued(enum demo_link_action action)
+{
+	lv_label_set_text_fmt(link_result_label, "%s queued", link_action_name(action));
+	lv_obj_set_style_text_color(link_result_label, color_amber, 0);
 }
 
 int demo_ui_render_image(const struct device *display)
@@ -528,6 +816,23 @@ void demo_ui_handle_event(const struct demo_ui_event *event)
 		}
 		set_state(DEMO_FAILED, now);
 		break;
+	case DEMO_UI_LINK_ACTION_RESULT: {
+		const enum demo_link_action action = (enum demo_link_action)event->request_id;
+
+		if (event->detail == 0) {
+			lv_label_set_text_fmt(link_result_label, "%s accepted",
+					      link_action_name(action));
+			lv_obj_set_style_text_color(link_result_label, color_green, 0);
+		} else if (event->detail == -EBUSY) {
+			lv_label_set_text(link_result_label, "LINK BUSY - action refused");
+			lv_obj_set_style_text_color(link_result_label, color_amber, 0);
+		} else {
+			lv_label_set_text_fmt(link_result_label, "%s failed: %d",
+					      link_action_name(action), event->detail);
+			lv_obj_set_style_text_color(link_result_label, color_red, 0);
+		}
+		break;
+	}
 	}
 }
 
@@ -535,6 +840,11 @@ void demo_ui_tick(uint32_t now_ms)
 {
 	const uint32_t elapsed = now_ms - state_started;
 	uint32_t progress;
+
+	if (demo_ui_link_active() && now_ms >= next_link_refresh_ms) {
+		refresh_link_screen();
+		next_link_refresh_ms = now_ms + LINK_REFRESH_MS;
+	}
 
 	if (completion_pending && elapsed >= TRANSFER_ANIMATION_MS) {
 		completion_pending = false;

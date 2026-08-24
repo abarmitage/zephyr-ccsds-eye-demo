@@ -368,6 +368,13 @@ ZTEST(demo_image, test_show_toggle_no_image_and_actions_from_image_view)
 	zassert_true(demo_view_prepare_action(&model));
 	zassert_equal(model.view, DEMO_VIEW_PROTOCOL);
 	zassert_false(demo_view_prepare_action(&model));
+
+	zassert_true(demo_view_enter_link(&model));
+	zassert_equal(model.view, DEMO_VIEW_LINK);
+	zassert_false(demo_view_enter_link(&model));
+	zassert_true(demo_view_leave_link(&model));
+	zassert_equal(model.view, DEMO_VIEW_PROTOCOL);
+	zassert_false(demo_view_leave_link(&model));
 }
 
 ZTEST_SUITE(demo_image, NULL, NULL, NULL, NULL, NULL);
