@@ -122,7 +122,7 @@ COP-1 counters:
 | `WAIT` | WAIT conditions entered locally or reported by the peer. |
 | `LKOUT` | Local or peer lockout transitions. |
 | `EXH` | COP-1 retry-limit exhaustion. |
-| `REJ` | Received USLP frames not accepted for data delivery. Causes include a malformed or mismatched frame, arrival while the local receiver is in WAIT or LOCKOUT, a sequence number ahead of the expected `VR`, or refusal by the packet-ingress path. A rejected CLCW is counted separately and does not increase `REJ`. |
+| `REJ` | Received USLP frames not accepted for data delivery. Causes include a malformed or mismatched frame, arrival while the local receiver is in WAIT or LOCKOUT, a sequence number ahead of the expected `VR`, or refusal by the packet-ingress path. |
 | `DUP` | Frames already accepted and received again, normally because their acknowledgement was lost. They are not delivered twice. |
 
 LINK diagnostics:
