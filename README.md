@@ -6,7 +6,7 @@ COP-1 flow-controlled USLP frames over Wi-Fi UDP to simulate a noisy, intermitte
 radio link. 
 
 Periodic peer-presence "ping" packets are exchanged while the link and CFDP service
-are idle. This maintains visibility of link status in the absense of other traffic.
+are idle. This maintains visibility of link status in the absence of other traffic.
 CLCW feedback caused by transfer traffic is immediate.
 
 The goal is to demonstrate [CCSDS for Zephyr](https://github.com/abarmitage/zephyr-ccsds),
