@@ -188,14 +188,15 @@ CFDP's ability to recover missing sections of a file.
 
 The demo COP-1 implementation tolerates an initial difference in Frame Sequence
 Numbers between peers on first boot. Attempts to start sending in this state 
-would result in Lockout. Preferably, we could avoid user intervention to reconcile
-any differences automatically on first start.
+would result in Lockout. Preferably, we could avoid operator intervention by
+automatically reconciling expected differences on first start.
 
 On initial CLCW acquisition after boot, a board adopts the peer's CLCW Report Value 
 and may send `BC_UNLOCK` if that peer is in Lockout state. 
 
 A later lockout or retry exhaustion is reported as `LINK ERROR`. The **LINK**
-screen provides manual unlock and sequence synchronization controls.
+screen provides manual resynchronization controls. Usually it is sufficient to 
+hit **SYNC** to automatically synchronize with the peer state.
 
 The demo does not automatically send `SET_VR`. `TRANSFER FAILED` is reserved for 
 an image transfer that actually failed at CFDP level.
