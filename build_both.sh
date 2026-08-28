@@ -21,12 +21,12 @@ mkdir -p -- "${ccache_dir}"
 CCACHE_DIR="${ccache_dir}" west build -p auto -b esp32s3_eye/esp32s3/procpu . \
 	-d build-role-a -- \
 	-DUSER_CACHE_DIR="${zephyr_cache_dir}" \
-	-DEXTRA_CONF_FILE='conf/role-a.conf;conf/eye-1.conf'
+	-DEXTRA_CONF_FILE='conf/role-a.conf;conf/eye-1.conf;conf/sdls.conf'
 
 CCACHE_DIR="${ccache_dir}" west build -p auto -b esp32s3_eye/esp32s3/procpu . \
 	-d build-role-b -- \
 	-DUSER_CACHE_DIR="${zephyr_cache_dir}" \
-	-DEXTRA_CONF_FILE='conf/role-b.conf;conf/eye-2.conf'
+	-DEXTRA_CONF_FILE='conf/role-b.conf;conf/eye-2.conf;conf/sdls.conf'
 
 echo "Role images ready:"
 echo "  ${script_dir}/build-role-a/zephyr/zephyr.bin"

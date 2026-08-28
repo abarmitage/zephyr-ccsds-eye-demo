@@ -43,10 +43,10 @@ fi
 cd -- "${script_dir}"
 
 west build -p always -b esp32s3_eye/esp32s3/procpu . -d build-role-a -- \
-	-DEXTRA_CONF_FILE='conf/role-a.conf;conf/eye-1.conf'
+	-DEXTRA_CONF_FILE='conf/role-a.conf;conf/eye-1.conf;conf/sdls.conf'
 
 west build -p always -b esp32s3_eye/esp32s3/procpu . -d build-role-b -- \
-	-DEXTRA_CONF_FILE='conf/role-b.conf;conf/eye-2.conf'
+	-DEXTRA_CONF_FILE='conf/role-b.conf;conf/eye-2.conf;conf/sdls.conf'
 
 west flash -d build-role-a --runner esp32 --esp-device "${role_a_device}"
 west flash -d build-role-b --runner esp32 --esp-device "${role_b_device}"

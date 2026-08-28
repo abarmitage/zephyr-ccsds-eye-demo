@@ -72,6 +72,9 @@ struct demo_link_snapshot {
 	uint32_t cfdp_naks_received;
 	uint32_t cfdp_retransmissions;
 	uint32_t route_failures;
+	uint32_t sdls_protected;
+	uint32_t sdls_authenticated;
+	uint32_t sdls_failures;
 	uint8_t fop_state;
 	uint8_t farm_state;
 	uint8_t transmit_sequence;

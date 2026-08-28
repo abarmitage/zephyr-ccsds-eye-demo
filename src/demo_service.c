@@ -14,6 +14,9 @@
 #include <ccsds/ccsds_udp.h>
 #include <ccsds/ccsds_uslp_frame.h>
 #include <ccsds/ccsds_uslp_peer.h>
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+#include <psa/crypto.h>
+#endif
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/net/net_if.h>
@@ -48,6 +51,11 @@ LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 #define CFDP_FILE_PDU_OVERHEAD       (CFDP_FIXED_HEADER_LEN + CFDP_FILE_OFFSET_LEN)
 #define CFDP_PACKET_OVERHEAD         (CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + CFDP_FILE_PDU_OVERHEAD)
 #define PEER_PACKET_CAPACITY         (CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + CCSDS_CFDP_MAX_PDU_SIZE)
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+#define PEER_SECURITY_OVERHEAD CCSDS_SDLS_PROTECTED_OVERHEAD
+#else
+#define PEER_SECURITY_OVERHEAD 0u
+#endif
 #define PEER_PACKET_SLOTS            4u
 #define LOCAL_SCID_INDICATION                                                                      \
 	(IS_ENABLED(CONFIG_EYE_DEMO_LOCAL_SCID_IS_SOURCE) ? CCSDS_USLP_SCID_IS_SOURCE              \
@@ -64,7 +72,7 @@ BUILD_ASSERT(CONFIG_CCSDS_UDP_MAX_UNIT_LEN <= 1280,
 BUILD_ASSERT(CONFIG_CCSDS_UDP_MAX_UNIT_LEN == CONFIG_CCSDS_MAX_FRAME_LEN,
 	     "one complete USLP frame must fit one UDP datagram");
 BUILD_ASSERT(PEER_PACKET_CAPACITY + CCSDS_USLP_PRIMARY_HDR_LEN + CCSDS_USLP_TFDF_HDR_LEN +
-			     CCSDS_USLP_OCF_LEN <=
+			     PEER_SECURITY_OVERHEAD + CCSDS_USLP_OCF_LEN <=
 		     CONFIG_CCSDS_MAX_FRAME_LEN,
 	     "maximum encoded Space Packet must fit one complete USLP frame");
 BUILD_ASSERT(CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE + CFDP_FILE_PDU_OVERHEAD <= CCSDS_CFDP_MAX_PDU_SIZE,
@@ -75,7 +83,7 @@ BUILD_ASSERT(CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE ==
 		     MIN(CCSDS_CFDP_MAX_PDU_SIZE - CFDP_FILE_PDU_OVERHEAD,
 			 PEER_PACKET_CAPACITY - CFDP_PACKET_OVERHEAD),
 	     "select the largest CFDP file-data segment that fits the USLP profile");
-BUILD_ASSERT(CFDP_MAX_SYNCHRONOUS_PACKETS == 117u,
+BUILD_ASSERT(CFDP_MAX_SYNCHRONOUS_PACKETS == 121u,
 	     "update the bounded CFDP burst analysis when the image or segment "
 	     "size changes");
 
@@ -208,6 +216,12 @@ static uint8_t peer_packet_queue[PEER_PACKET_SLOTS][PEER_PACKET_CAPACITY];
 static size_t peer_packet_lengths[PEER_PACKET_SLOTS];
 static uint8_t peer_sent_frames[CCSDS_USLP_PEER_WINDOW_K][CONFIG_CCSDS_MAX_FRAME_LEN];
 static size_t peer_sent_lengths[CCSDS_USLP_PEER_WINDOW_K];
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+static struct ccsds_sdls_ctx sdls_ctx;
+static uint8_t sdls_plaintext[PEER_PACKET_CAPACITY + CCSDS_USLP_TFDF_HDR_LEN +
+			      CCSDS_SDLS_PROTECTED_OVERHEAD];
+static uint8_t sdls_workspace[CCSDS_USLP_PRIMARY_HDR_LEN + sizeof(sdls_plaintext)];
+#endif
 static size_t peak_outstanding;
 static uint32_t submit_backpressure;
 static uint32_t submit_terminal_errors;
@@ -1347,6 +1361,11 @@ static void publish_link_snapshot(void)
 		.cfdp_naks_received = cfdp_naks_received,
 		.cfdp_retransmissions = cfdp_retransmissions,
 		.route_failures = peer_state.stats.route_failures,
+#if defined(CONFIG_CCSDS_SDLS)
+		.sdls_protected = peer_state.stats.sdls_frames_protected,
+		.sdls_authenticated = peer_state.stats.sdls_frames_authenticated,
+		.sdls_failures = peer_state.stats.sdls_failures,
+#endif
 		.fop_state = (uint8_t)peer_state.fop_state,
 		.farm_state = (uint8_t)peer_state.farm_state,
 		.transmit_sequence = peer_state.transmit_sequence,
@@ -1435,6 +1454,100 @@ static int apply_static_ipv4(struct net_if *iface)
 	return 0;
 }
 
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+/* Fixed Stage 1 prototype keys. Never use these values operationally. */
+static const uint8_t prototype_key_eye1_to_eye2[CCSDS_SDLS_AES_KEY_BITS / 8u] = {
+	0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+	0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f,
+	0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27,
+	0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f,
+};
+static const uint8_t prototype_key_eye2_to_eye1[CCSDS_SDLS_AES_KEY_BITS / 8u] = {
+	0x90, 0x91, 0x92, 0x93, 0x94, 0x95, 0x96, 0x97,
+	0x98, 0x99, 0x9a, 0x9b, 0x9c, 0x9d, 0x9e, 0x9f,
+	0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
+	0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
+};
+
+static psa_status_t import_prototype_key(const uint8_t *bytes,
+					 psa_key_id_t *key_id)
+{
+	psa_key_attributes_t attributes = PSA_KEY_ATTRIBUTES_INIT;
+	psa_status_t status;
+
+	psa_set_key_usage_flags(&attributes,
+				PSA_KEY_USAGE_ENCRYPT | PSA_KEY_USAGE_DECRYPT);
+	psa_set_key_algorithm(&attributes, PSA_ALG_GCM);
+	psa_set_key_type(&attributes, PSA_KEY_TYPE_AES);
+	psa_set_key_bits(&attributes, CCSDS_SDLS_AES_KEY_BITS);
+	status = psa_import_key(&attributes, bytes, CCSDS_SDLS_AES_KEY_BITS / 8u,
+				key_id);
+	psa_reset_key_attributes(&attributes);
+	return status;
+}
+
+static int initialize_sdls(void)
+{
+	psa_key_id_t eye1_to_eye2;
+	psa_key_id_t eye2_to_eye1;
+	struct ccsds_sdls_key_init keys[2];
+	struct ccsds_sdls_sa_init sas[2];
+	uint16_t tx_spi = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 1u : 2u;
+	uint16_t rx_spi = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 2u : 1u;
+	psa_status_t status = psa_crypto_init();
+
+	if (status != PSA_SUCCESS) {
+		LOG_ERR("SDLS prototype key initialization failed: %d", status);
+		return -EIO;
+	}
+	status = import_prototype_key(prototype_key_eye1_to_eye2, &eye1_to_eye2);
+	if (status != PSA_SUCCESS) {
+		LOG_ERR("SDLS EYE-1 transmit-key import failed: %d", status);
+		return -EIO;
+	}
+	status = import_prototype_key(prototype_key_eye2_to_eye1, &eye2_to_eye1);
+	if (status != PSA_SUCCESS) {
+		LOG_ERR("SDLS EYE-2 transmit-key import failed: %d", status);
+		(void)psa_destroy_key(eye1_to_eye2);
+		return -EIO;
+	}
+	keys[0] = (struct ccsds_sdls_key_init){
+		.psa_key_id = eye1_to_eye2,
+		.key_id = CONFIG_CCSDS_SDLS_SESSION_KEY_BASE,
+		.state = CCSDS_SDLS_KEY_ACTIVE,
+	};
+	keys[1] = (struct ccsds_sdls_key_init){
+		.psa_key_id = eye2_to_eye1,
+		.key_id = CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 1u,
+		.state = CCSDS_SDLS_KEY_ACTIVE,
+	};
+	sas[0] = (struct ccsds_sdls_sa_init){
+		.spi = tx_spi,
+		.key_id = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A)
+				 ? CONFIG_CCSDS_SDLS_SESSION_KEY_BASE
+				 : CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 1u,
+		.role = CCSDS_SDLS_SA_OPERATIONAL_USLP_TX,
+		.mode = CCSDS_SDLS_MODE_GCM,
+		.state = CCSDS_SDLS_SA_OPERATIONAL,
+		.has_key = true,
+	};
+	sas[1] = (struct ccsds_sdls_sa_init){
+		.spi = rx_spi,
+		.key_id = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A)
+				 ? CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 1u
+				 : CONFIG_CCSDS_SDLS_SESSION_KEY_BASE,
+		.role = CCSDS_SDLS_SA_OPERATIONAL_USLP_RX,
+		.mode = CCSDS_SDLS_MODE_GCM,
+		.state = CCSDS_SDLS_SA_OPERATIONAL,
+		.has_key = true,
+	};
+	ccsds_sdls_init(&sdls_ctx, sas, ARRAY_SIZE(sas), keys, ARRAY_SIZE(keys));
+	sdls_ctx.sas[rx_spi - 1u].rx_window = UINT32_MAX;
+	LOG_WRN("SDLS Stage 1 enabled with fixed prototype keys and no ARSN check");
+	return 0;
+}
+#endif
+
 static int initialize_protocol(void)
 {
 	struct ccsds_udp_config udp_config = {
@@ -1483,6 +1596,21 @@ static int initialize_protocol(void)
 		.initial_transmit_sequence = CONFIG_EYE_DEMO_INITIAL_TRANSMIT_SEQUENCE,
 		.initial_receive_sequence = CONFIG_EYE_DEMO_INITIAL_RECEIVE_SEQUENCE,
 	};
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+	if (initialize_sdls() != 0) {
+		return -EIO;
+	}
+	peer_config.security = (struct ccsds_uslp_peer_security){
+		.ctx = &sdls_ctx,
+		.workspace = {
+			.data = sdls_workspace,
+			.capacity = sizeof(sdls_workspace),
+		},
+		.plaintext = sdls_plaintext,
+		.plaintext_capacity = sizeof(sdls_plaintext),
+		.transmit_spi = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 1u : 2u,
+	};
+#endif
 	struct ccsds_cfdp_service_config cfdp_config = {
 		.local_entity_id = CONFIG_EYE_DEMO_LOCAL_ENTITY_ID,
 		.remote_entity_id = CONFIG_EYE_DEMO_PEER_ENTITY_ID,

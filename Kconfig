@@ -14,6 +14,24 @@ config EYE_DEMO_ROLE_B
 
 endchoice
 
+choice EYE_DEMO_LINK_SECURITY
+	prompt "USLP link security"
+	default EYE_DEMO_LINK_CLEAR
+
+config EYE_DEMO_LINK_CLEAR
+	bool "Clear USLP/COP-1"
+
+config EYE_DEMO_LINK_SDLS
+	bool "Prototype SDLS authenticated encryption"
+	select CCSDS_SDLS
+	select ENTROPY_GENERATOR
+	help
+	  Protect packet-bearing Type-AD frames with fixed prototype keys.
+	  Stage 1 deliberately disables ARSN replay checking and is not an
+	  operationally secure profile.
+
+endchoice
+
 config EYE_DEMO_CALLSIGN
 	string "Local callsign"
 	default "EYE-1" if EYE_DEMO_ROLE_A
