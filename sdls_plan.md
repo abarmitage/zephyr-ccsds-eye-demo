@@ -221,19 +221,17 @@ Use the existing 96-bit IV division:
 
 At the end of each development session, update this section only:
 
-- Current stage: Stage 1 physical hardware verification in progress
-- Last completed item: secured image transfer passed in both directions; EYE-2
-  independent reset recovered through manual SYNC. After resetting EYE-1 and
-  missing the recovery interval, both peers entered LINK error; resetting EYE-2
-  then restored both peers and successful transfer
+- Current stage: Stage 1 complete
+- Last completed item: hardware LINK diagnostics and retransmission recovery
+  verified; a successful transfer observed TMOUT=1, RETX=1, and DUP=2, while
+  SDLS protected/authenticated counters increased without unexpected failures
 - Tests last run: reusable native suites 393/393, focused final SDLS/USLP-peer
   suites 79/79, EYE demo native suite 16/16, UDP CFDP integration 10/10;
   EYE-1 and EYE-2 clear and secured board builds all passed; the final secured
   `build_both.sh` workflow passed for both roles
 - Hardware state: secured images flashed; bidirectional transfer, independent
-  EYE-2 recovery through manual SYNC, and recovery after both peers reset passed.
-  Injected-loss recovery, timely independent EYE-1 recovery, and final
-  LINK-counter inspection remain unverified
-- Next item: repeat the EYE-1 reset and issue SYNC within the recovery interval,
-  then verify injected frame-loss recovery and inspect LINK SDLS counters
+  restart recovery for EYE-1 and EYE-2 through operator SYNC, LINK diagnostics,
+  and observed timeout/retransmission/duplicate recovery all passed. A separate
+  deterministic hardware fault-injection build was not run
+- Next item: begin Stage 2 only when explicitly requested
 - Known blocker: none

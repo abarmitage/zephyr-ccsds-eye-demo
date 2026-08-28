@@ -15,7 +15,8 @@ communication over USLP for bulk or high-rate data on inter-satellite links.
 One question is how far peers should autonomously recover and resynchronize after 
 disruption before declaring a link failure.
 
-SDLS security is not yet used. 
+SDLS security (GCM) authentication & encryption is used, but without AR sequence checking
+or synchronisation (work-in-progress)
 
 ## Controls
 
