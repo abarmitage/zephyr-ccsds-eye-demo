@@ -15,8 +15,8 @@ communication over USLP for bulk or high-rate data on inter-satellite links.
 One question is how far peers should autonomously recover and resynchronize after 
 disruption before declaring a link failure.
 
-SDLS security (GCM) authentication & encryption is used, anti-replay sequencing and automated
-recovery on link loss is discussed below.
+SDLS security (GCM) authentication & encryption is used, anti-replay sequencing is enforced.
+Automated recovery on link loss is discussed [below.](#sdls-anti-replay-initialisation--recovery)
 
 ## Controls
 
