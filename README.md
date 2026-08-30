@@ -235,9 +235,10 @@ sequence enforcement.
 This supports automatic cold-start recovery, but recovery after an independent
 restart currently requires **SYNC** on the peer that remained running. Because
 the demo uses fixed prototype keys, a previously recorded valid frame could
-establish the baseline while adoption is armed. Fully automatic authenticated
-recovery requires fresh operational keys provisioned through OTAR, which is not
-yet implemented.
+spuriously establish a baseline while adoption is armed. 
+
+OTAR is supported for provisioning fresh operational keys, but post-recovery 
+key rotation is not (yet) initiated automatically.
 
 ## Tagged demonstration versions
 
