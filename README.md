@@ -205,7 +205,9 @@ its limit after approximately six seconds and reports `LINK ERROR`.
 With UDP over Wi-Fi, this is occasionally observed after the demo has been idle
 for several hours. These naturally occurring link failures are useful for
 exercising and demonstrating the resynchronization and recovery procedures
-under realistic conditions.
+under realistic conditions. The goal of the demo is not to eliminate link errors, 
+but to explore how flow control and security can be maintained—and how the link
+can recover predictably with minimum intervention—when errors occur.
 
 ### COP-1 Synchronization
 
