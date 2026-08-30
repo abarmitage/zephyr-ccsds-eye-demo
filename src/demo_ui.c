@@ -337,9 +337,13 @@ static void refresh_link_screen(void)
 	lv_label_set_text_fmt(link_terminal_label, "TERM %u",
 			      snapshot.terminal_failures);
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
-	lv_label_set_text_fmt(link_sdls_label, "SDLS TX/RX %u/%u  FAIL %u",
+	lv_label_set_text_fmt(link_sdls_label,
+			      "SDLS %s TX/RX %u/%u\nR/A/S %u/%u/%u FSR %u/%u",
+			      snapshot.sdls_adoption_armed ? "ADOPT" : "EST",
 			      snapshot.sdls_protected, snapshot.sdls_authenticated,
-			      snapshot.sdls_failures);
+			      snapshot.sdls_replay_failures,
+			      snapshot.sdls_auth_failures, snapshot.sdls_sa_failures,
+			      snapshot.fsrs_sent, snapshot.fsrs_received);
 #else
 	lv_label_set_text(link_sdls_label, "SDLS CLEAR");
 #endif
@@ -435,46 +439,46 @@ static void create_link_screen(void)
 	lv_label_set_text(link_sdls_label,
 			  IS_ENABLED(CONFIG_EYE_DEMO_LINK_SDLS) ? "SDLS WAITING" : "SDLS CLEAR");
 	lv_obj_set_style_text_color(link_sdls_label, color_green, 0);
-	lv_obj_set_pos(link_sdls_label, 4, 140);
+	lv_obj_set_pos(link_sdls_label, 4, 136);
 
 	label = lv_label_create(link_screen);
 	lv_label_set_text(label, "CFDP");
 	lv_obj_set_style_text_color(label, color_cyan, 0);
-	lv_obj_set_pos(label, 4, 158);
+	lv_obj_set_pos(label, 4, 166);
 
 	link_cfdp_label = lv_label_create(link_screen);
 	lv_obj_set_width(link_cfdp_label, 232);
-	lv_obj_set_pos(link_cfdp_label, 4, 170);
+	lv_obj_set_pos(link_cfdp_label, 4, 178);
 	lv_label_set_text(link_cfdp_label, "NAK TX/RX 0/0");
 
 	link_cfdp_retx_label = lv_label_create(link_screen);
 	lv_label_set_text(link_cfdp_retx_label, "RETX --");
-	lv_obj_align(link_cfdp_retx_label, LV_ALIGN_TOP_RIGHT, -4, 170);
+	lv_obj_align(link_cfdp_retx_label, LV_ALIGN_TOP_RIGHT, -4, 178);
 
 	link_result_label = lv_label_create(link_screen);
 	lv_obj_set_width(link_result_label, 232);
 	lv_obj_set_style_text_align(link_result_label, LV_TEXT_ALIGN_CENTER, 0);
 	lv_obj_set_style_text_color(link_result_label, color_muted, 0);
-	lv_obj_set_pos(link_result_label, 4, 184);
+	lv_obj_set_pos(link_result_label, 4, 190);
 	lv_label_set_text(link_result_label, "");
 
-	(void)solid_obj(link_screen, 0, 201, SCREEN_WIDTH, 1, color_panel);
+	(void)solid_obj(link_screen, 0, 205, SCREEN_WIDTH, 1, color_panel);
 
 	label = lv_label_create(link_screen);
 	lv_label_set_text(label, "< UNLOCK");
-	lv_obj_set_pos(label, 4, 202);
+	lv_obj_set_pos(label, 4, 206);
 
 	label = lv_label_create(link_screen);
 	lv_label_set_text(label, "< SET VR");
-	lv_obj_set_pos(label, 4, 217);
+	lv_obj_set_pos(label, 4, 220);
 
 	label = lv_label_create(link_screen);
 	lv_label_set_text(label, "SYNC >");
-	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -4, 202);
+	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -4, 206);
 
 	label = lv_label_create(link_screen);
 	lv_label_set_text(label, "BACK >");
-	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -4, 217);
+	lv_obj_align(label, LV_ALIGN_TOP_RIGHT, -4, 220);
 }
 
 void demo_ui_init(void)

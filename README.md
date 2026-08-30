@@ -15,8 +15,8 @@ communication over USLP for bulk or high-rate data on inter-satellite links.
 One question is how far peers should autonomously recover and resynchronize after 
 disruption before declaring a link failure.
 
-SDLS security (GCM) authentication & encryption is used, but without AR sequence checking
-or synchronisation (work-in-progress)
+SDLS security (GCM) authentication & encryption is used, anti-replay sequencing and automated
+recovery on link loss is discussed below.
 
 ## Controls
 
@@ -185,22 +185,59 @@ It's interesting to compare the two configurations:
 Clearly, flow-controlled is preferable, although in the demo, it "hides"
 CFDP's ability to recover missing sections of a file.
 
-## Initial Startup Approach
+## Initial Startup & Link Recovery
 
-The demo COP-1 implementation tolerates an initial difference in Frame Sequence
-Numbers between peers on first boot. Attempts to start sending in this state 
-would result in Lockout. Preferably, we could avoid operator intervention by
-automatically reconciling expected differences on first start.
+The demo represents two autonomous remote entities (“spacecraft”). Its goal is
+to recover and resynchronize with minimal operator intervention after either
+entity resets or loses the link.
 
-On initial CLCW acquisition after boot, a board adopts the peer's CLCW Report Value 
-and may send `BC_UNLOCK` if that peer is in Lockout state. 
+Persisting protocol sequence state after every frame would increase storage
+wear and operational complexity. The demo therefore treats COP-1 and SDLS
+session state as volatile and explicitly handles the resulting differences
+between peers after startup or reset.
 
-A later lockout or retry exhaustion is reported as `LINK ERROR`. The **LINK**
-screen provides manual resynchronization controls. Usually it is sufficient to 
-hit **SYNC** to automatically synchronize with the peer state.
+### COP-1 Synchronization
 
-The demo does not automatically send `SET_VR`. `TRANSFER FAILED` is reserved for 
-an image transfer that actually failed at CFDP level.
+After a reset, the peers may disagree about their expected Frame Sequence
+Numbers. Attempting to continue without reconciliation can result in rejected
+frames, retransmissions, or Lockout.
+
+On initial CLCW acquisition after boot, the transmitter adopts the peer’s CLCW
+Report Value and may send `BC_UNLOCK` if the peer is in Lockout. This allows
+normal startup to reconcile automatically.
+
+A later Lockout or retry exhaustion is reported as `LINK ERROR`, rather than
+silently changing established link state. The **LINK** screen then provides
+manual resynchronization controls; normally, pressing **SYNC** is sufficient.
+The demo does not automatically send `SET_VR`.
+
+`TRANSFER FAILED` is reserved for an image transfer that actually failed at
+CFDP level.
+
+### SDLS Anti-Replay Initialisation & Recovery
+
+AES-GCM requires IVs to remain unique while a key is in use. The demo’s 96-bit
+IV contains a 64-bit sender component and a 32-bit Anti-Replay Sequence Number
+(ARSN). A reset returns the ARSN to zero, so an established receiver would
+otherwise reject the restarted peer’s frames.
+
+At each boot, the sender initializes the upper 64-bit component from entropy.
+It then advances that component using a 64-bit Weyl sequence while incrementing
+the ARSN modulo 2³². The complete IV is authenticated, while receive-side replay
+enforcement is applied to the ARSN.
+
+An operational receive association initially enters `ADOPT` state. Local
+**SYNC** also deliberately re-arms this state. While armed, any ARSN may
+establish the new baseline, but only after the frame passes authentication,
+plaintext validation, and delivery. The receiver then returns to anti-replay 
+sequence enforcement.
+
+This supports automatic cold-start recovery, but recovery after an independent
+restart currently requires **SYNC** on the peer that remained running. Because
+the demo uses fixed prototype keys, a previously recorded valid frame could
+establish the baseline while adoption is armed. Fully automatic authenticated
+recovery requires fresh operational keys provisioned through OTAR, which is not
+yet implemented.
 
 ## Tagged demonstration versions
 

@@ -221,17 +221,24 @@ Use the existing 96-bit IV division:
 
 At the end of each development session, update this section only:
 
-- Current stage: Stage 1 complete
-- Last completed item: hardware LINK diagnostics and retransmission recovery
-  verified; a successful transfer observed TMOUT=1, RETX=1, and DUP=2, while
-  SDLS protected/authenticated counters increased without unexpected failures
-- Tests last run: reusable native suites 393/393, focused final SDLS/USLP-peer
-  suites 79/79, EYE demo native suite 16/16, UDP CFDP integration 10/10;
-  EYE-1 and EYE-2 clear and secured board builds all passed; the final secured
+- Current stage: Stage 2 software implementation complete; hardware verification
+  pending
+- Last completed item: bounded ARSN receive sessions, authentication-gated boot
+  and local-SYNC adoption, strict Version-1 FSR wire handling, bounded CLCW/FSR
+  scheduling, and categorized LINK diagnostics implemented
+- Tests last run: reusable native suites 416/416, focused SDLS 51/51 and
+  USLP-peer 31/31, EYE demo native suite 18/18, CFDP UDP integration success,
+  loss-recovery, and corruption scenarios passed, and USLP/CFDP UDP integration
+  10/10; EYE-1 and EYE-2 clear builds passed and the final secured
   `build_both.sh` workflow passed for both roles
-- Hardware state: secured images flashed; bidirectional transfer, independent
-  restart recovery for EYE-1 and EYE-2 through operator SYNC, LINK diagnostics,
-  and observed timeout/retransmission/duplicate recovery all passed. A separate
-  deterministic hardware fault-injection build was not run
-- Next item: begin Stage 2 only when explicitly requested
-- Known blocker: none
+- Hardware state: Stage 2 images have not been flashed or exercised. The Stage 1
+  hardware checkpoint remains the last physical result; all Stage 2 restart,
+  bidirectional transfer, LINK recovery, diagnostics, and varied-boot-IV checks
+  still require the two-board run in the Stage 2 prompt
+- Next item: flash both Stage 2 secured images and complete the two-board
+  hardware verification checklist before declaring Stage 2 complete
+- Known security limitation: with fixed prototype keys, an authenticated frame
+  recorded earlier can establish the receive baseline while adoption is armed;
+  fresh directional operational keys in Stage 3 are required to exclude it
+- Known blocker: Stage 2 completion requires access to both EYE boards and their
+  device paths; no software blocker remains

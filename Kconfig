@@ -22,13 +22,15 @@ config EYE_DEMO_LINK_CLEAR
 	bool "Clear USLP/COP-1"
 
 config EYE_DEMO_LINK_SDLS
-	bool "Prototype SDLS authenticated encryption"
+	bool "Stage 2 SDLS authenticated encryption"
 	select CCSDS_SDLS
 	select ENTROPY_GENERATOR
 	help
-	  Protect packet-bearing Type-AD frames with fixed prototype keys.
-	  Stage 1 deliberately disables ARSN replay checking and is not an
-	  operationally secure profile.
+	  Protect packet-bearing Type-AD frames with fixed prototype keys and a
+	  bounded in-session ARSN check. Boot and local SYNC arm authenticated
+	  receive-baseline adoption. While adoption is armed, a previously recorded
+	  valid fixed-key frame can establish the baseline; fresh Stage 3 keys are
+	  required to exclude that replay case.
 
 endchoice
 

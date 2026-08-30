@@ -75,6 +75,11 @@ struct demo_link_snapshot {
 	uint32_t sdls_protected;
 	uint32_t sdls_authenticated;
 	uint32_t sdls_failures;
+	uint32_t sdls_replay_failures;
+	uint32_t sdls_auth_failures;
+	uint32_t sdls_sa_failures;
+	uint32_t fsrs_sent;
+	uint32_t fsrs_received;
 	uint8_t fop_state;
 	uint8_t farm_state;
 	uint8_t transmit_sequence;
@@ -92,6 +97,7 @@ struct demo_link_snapshot {
 	bool cfdp_tx_active;
 	bool cfdp_rx_active;
 	bool terminal_failure;
+	bool sdls_adoption_armed;
 	int peer_error;
 	int route_error;
 	int udp_error;

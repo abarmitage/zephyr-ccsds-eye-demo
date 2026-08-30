@@ -2,6 +2,7 @@
 
 #include "demo_service.h"
 #include "demo_camera.h"
+#include "demo_sdls_feedback.h"
 
 #include <errno.h>
 #include <string.h>
@@ -53,6 +54,9 @@ LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 #define PEER_PACKET_CAPACITY         (CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + CCSDS_CFDP_MAX_PDU_SIZE)
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
 #define PEER_SECURITY_OVERHEAD CCSDS_SDLS_PROTECTED_OVERHEAD
+#define EYE_SDLS_ARSN_WINDOW 1u
+#define EYE_SDLS_RX_SPI                                                        \
+	(IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 2u : 1u)
 #else
 #define PEER_SECURITY_OVERHEAD 0u
 #endif
@@ -218,6 +222,7 @@ static uint8_t peer_sent_frames[CCSDS_USLP_PEER_WINDOW_K][CONFIG_CCSDS_MAX_FRAME
 static size_t peer_sent_lengths[CCSDS_USLP_PEER_WINDOW_K];
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
 static struct ccsds_sdls_ctx sdls_ctx;
+static struct demo_sdls_feedback_policy sdls_feedback_policy;
 static uint8_t sdls_plaintext[PEER_PACKET_CAPACITY + CCSDS_USLP_TFDF_HDR_LEN +
 			      CCSDS_SDLS_PROTECTED_OVERHEAD];
 static uint8_t sdls_workspace[CCSDS_USLP_PRIMARY_HDR_LEN + sizeof(sdls_plaintext)];
@@ -273,10 +278,35 @@ static int start_link_sync(uint64_t now, bool preserve_receive_sequence)
 		link_sync_phase = LINK_SYNC_CLCW;
 		peer_ready = false;
 		peak_outstanding = 0u;
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+		memset(&sdls_feedback_policy, 0, sizeof(sdls_feedback_policy));
+#endif
 		LOG_INF("USLP COP-1 synchronization started");
 	}
 	return rc;
 }
+
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+static int select_security_ocf(void *user_data, const uint8_t clcw[4],
+			       uint8_t selected_ocf[4])
+{
+	struct ccsds_sdls_ctx *ctx = user_data;
+	struct ccsds_uslp_peer_snapshot snapshot;
+	bool cop_urgent;
+
+	ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
+	cop_urgent = snapshot.fop_state != CCSDS_USLP_FOP_ACTIVE ||
+		     snapshot.farm_state != CCSDS_USLP_FARM_OPEN ||
+		     snapshot.outstanding_frames != 0u;
+	if (ctx->fsr_enabled && demo_sdls_feedback_select_fsr(
+				    &sdls_feedback_policy, clcw, cop_urgent)) {
+		ccsds_sdls_fsr_encode(ctx, selected_ocf);
+	} else {
+		memcpy(selected_ocf, clcw, CCSDS_USLP_OCF_LEN);
+	}
+	return 0;
+}
+#endif
 
 static int advance_link_sync(uint64_t now, int peer_rc,
 			     const struct ccsds_uslp_peer_snapshot *snapshot)
@@ -1223,7 +1253,14 @@ static int process_link_action(enum action_type action, uint64_t now)
 		return -EBUSY;
 	}
 	if (action == ACTION_LINK_SYNC_TX) {
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+		rc = ccsds_sdls_arm_receive_adoption(&sdls_ctx, EYE_SDLS_RX_SPI);
+		if (rc == 0) {
+			rc = start_link_sync(now, true);
+		}
+#else
 		rc = start_link_sync(now, true);
+#endif
 	} else {
 		if (snapshot.terminal_failure || link_sync_phase == LINK_SYNC_FAILED) {
 			struct ccsds_uslp_peer_config config = peer_config;
@@ -1361,10 +1398,16 @@ static void publish_link_snapshot(void)
 		.cfdp_naks_received = cfdp_naks_received,
 		.cfdp_retransmissions = cfdp_retransmissions,
 		.route_failures = peer_state.stats.route_failures,
-#if defined(CONFIG_CCSDS_SDLS)
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
 		.sdls_protected = peer_state.stats.sdls_frames_protected,
 		.sdls_authenticated = peer_state.stats.sdls_frames_authenticated,
 		.sdls_failures = peer_state.stats.sdls_failures,
+		.sdls_replay_failures = peer_state.stats.sdls_replay_failures,
+		.sdls_auth_failures = peer_state.stats.sdls_auth_failures,
+		.sdls_sa_failures = peer_state.stats.sdls_sa_failures,
+		.fsrs_sent = peer_state.stats.fsrs_emitted,
+		.fsrs_received = peer_state.stats.fsrs_received,
+		.sdls_adoption_armed = sdls_ctx.sas[EYE_SDLS_RX_SPI - 1u].rx_adoption_armed,
 #endif
 		.fop_state = (uint8_t)peer_state.fop_state,
 		.farm_state = (uint8_t)peer_state.farm_state,
@@ -1433,6 +1476,17 @@ static void trace_link_snapshot(const char *reason)
 		cfdp_naks_sent, cfdp_naks_received, cfdp_retransmissions,
 		snapshot.stats.route_failures, snapshot.stats.last_error, terminal_route_error,
 		udp_stats.last_error, submit_terminal_errors);
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+	LOG_INF("SDLS Stage 2 rx_session=%s arsn=%u replay=%u auth=%u sa=%u "
+		"fsr_tx=%u fsr_rx=%u",
+		sdls_ctx.sas[EYE_SDLS_RX_SPI - 1u].rx_adoption_armed
+			? "ADOPTION_ARMED"
+			: "ESTABLISHED",
+		sdls_ctx.sas[EYE_SDLS_RX_SPI - 1u].rx_arsn,
+		snapshot.stats.sdls_replay_failures,
+		snapshot.stats.sdls_auth_failures, snapshot.stats.sdls_sa_failures,
+		snapshot.stats.fsrs_emitted, snapshot.stats.fsrs_received);
+#endif
 }
 
 static int apply_static_ipv4(struct net_if *iface)
@@ -1493,7 +1547,7 @@ static int initialize_sdls(void)
 	struct ccsds_sdls_key_init keys[2];
 	struct ccsds_sdls_sa_init sas[2];
 	uint16_t tx_spi = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 1u : 2u;
-	uint16_t rx_spi = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 2u : 1u;
+	uint16_t rx_spi = EYE_SDLS_RX_SPI;
 	psa_status_t status = psa_crypto_init();
 
 	if (status != PSA_SUCCESS) {
@@ -1542,8 +1596,12 @@ static int initialize_sdls(void)
 		.has_key = true,
 	};
 	ccsds_sdls_init(&sdls_ctx, sas, ARRAY_SIZE(sas), keys, ARRAY_SIZE(keys));
-	sdls_ctx.sas[rx_spi - 1u].rx_window = UINT32_MAX;
-	LOG_WRN("SDLS Stage 1 enabled with fixed prototype keys and no ARSN check");
+	sdls_ctx.sas[rx_spi - 1u].rx_window = EYE_SDLS_ARSN_WINDOW;
+	ccsds_sdls_fsr_set_enabled(&sdls_ctx, true);
+	memset(&sdls_feedback_policy, 0, sizeof(sdls_feedback_policy));
+	LOG_WRN("SDLS Stage 2 fixed-key profile: ARSN window=%u; authenticated "
+		"adoption permits valid recorded traffic while armed",
+		EYE_SDLS_ARSN_WINDOW);
 	return 0;
 }
 #endif
@@ -1610,6 +1668,8 @@ static int initialize_protocol(void)
 		.plaintext_capacity = sizeof(sdls_plaintext),
 		.transmit_spi = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 1u : 2u,
 	};
+	peer_config.select_ocf = select_security_ocf;
+	peer_config.select_ocf_user_data = &sdls_ctx;
 #endif
 	struct ccsds_cfdp_service_config cfdp_config = {
 		.local_entity_id = CONFIG_EYE_DEMO_LOCAL_ENTITY_ID,

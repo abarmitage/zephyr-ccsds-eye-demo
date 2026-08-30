@@ -7,8 +7,10 @@ project(eye_demo_protocol_tests)
 target_sources(app PRIVATE
     src/test_demo_protocol.c
     src/test_demo_image.c
+    src/test_demo_sdls_feedback.c
     ../src/demo_protocol.c
     ../src/demo_image.c
     ../src/demo_view.c
+    ../src/demo_sdls_feedback.c
 )
 target_include_directories(app PRIVATE ../src)

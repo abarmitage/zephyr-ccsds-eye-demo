@@ -10,6 +10,7 @@ target_sources(app PRIVATE
     src/demo_protocol.c
     src/demo_image.c
     src/demo_view.c
+    src/demo_sdls_feedback.c
     src/demo_camera.c
     src/demo_service.c
 )
