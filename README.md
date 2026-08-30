@@ -196,6 +196,17 @@ wear and operational complexity. The demo therefore treats COP-1 and SDLS
 session state as volatile and explicitly handles the resulting differences
 between peers after startup or reset.
 
+In the demo configuration, periodic peer-status packets keep COP-1 active
+ while the demo is otherwise idle. If an outstanding frame receives no
+usable acknowledgement after 12 transmission attempts—because either the frame
+or its returning CLCW feedback is lost—the 500 ms retransmission timer reaches
+its limit after approximately six seconds and reports `LINK ERROR`.
+
+With UDP over Wi-Fi, this is occasionally observed after the demo has been idle
+for several hours. These naturally occurring link failures are useful for
+exercising and demonstrating the resynchronization and recovery procedures
+under realistic conditions.
+
 ### COP-1 Synchronization
 
 After a reset, the peers may disagree about their expected Frame Sequence
