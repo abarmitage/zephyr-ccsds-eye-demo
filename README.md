@@ -234,11 +234,17 @@ sequence enforcement.
 
 This supports automatic cold-start recovery, but recovery after an independent
 restart currently requires **SYNC** on the peer that remained running. Because
-the demo uses fixed prototype keys, a previously recorded valid frame could
-spuriously establish a baseline while adoption is armed. 
+the demo reuses fixed prototype keys across restarts, a previously recorded
+valid frame could spuriously establish the receive ARSN baseline while the
+receiver is temporarily in `ADOPT` state.
 
-OTAR is supported for provisioning fresh operational keys, but post-recovery 
-key rotation is not (yet) initiated automatically.
+To close this replay opportunity, fresh operational keys should be
+established through OTAR after resynchronization and before ordinary traffic
+resumes. Frames recorded under the previous keys would then fail
+authentication.
+
+OTAR is supported, but the demo does not yet initiate this post-recovery key
+rotation automatically.
 
 ## Tagged demonstration versions
 
