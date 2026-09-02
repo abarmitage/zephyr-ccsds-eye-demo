@@ -9,16 +9,17 @@ Periodic "ping" packets are exchanged while the link and CFDP service
 are idle. This maintains visibility of link status in the absence of other traffic.
 CLCW feedback caused by transfer traffic is immediate.
 
+SDLS security (GCM) authentication & encryption is used, anti-replay sequencing is enforced
+during nominal operations. SDLS EP is partially used during link recovery.
+
 The goal is to demonstrate [CCSDS for Zephyr](https://github.com/abarmitage/zephyr-ccsds),
 and to explore protocol tradeoffs when satellites use symmetrical flow-controlled
 communication over USLP for bulk or high-rate data on inter-satellite links.
-One question is how far peers should autonomously recover and resynchronize after
-disruption or link failure.
-
-SDLS security (GCM) authentication & encryption is used, anti-replay sequencing is enforced.
+A key question of the experiment is how the peers can autonomously recover and
+resynchronize after disruption or link failure.
 
 Automated recovery of COP-1, ARSN sequencing and key rotation on link loss is discussed
-[below.](#sdls-anti-replay-initialisation--recovery)
+[below.](#initial-startup--link-recovery)
 
 ## Controls
 
