@@ -101,16 +101,20 @@ separate final step.
 
 ## Diagnostics
 
-The **LINK** screen summarizes the current protocol state:
+The **LINK** screen groups live state by protocol. Section headings and their
+right-hand state summaries use a common color: COP-1 is amber, LINK is red,
+SDLS is green, and CFDP is cyan. Counters beneath each heading are white. The
+left column is left-aligned and the right column is right-aligned.
+
+Top link state:
 
 | Field | Meaning |
 | --- | --- |
-| `PEER` | Local transmit-side COP-1 state. |
+| `PEER` | Local transmit-side COP-1 state: `OK`, `UNAVAILABLE`, `SYNC`, `CONTROL`, `RETRANSMIT`, `WAIT/RETX`, `LOCKOUT`, or `FAILED`. |
 | `V(R)` | Report Value in the latest CLCW received from the peer. |
-| `LOCAL` | Local receive-side COP-1 state. |
+| `LOCAL` | Local receive-side COP-1 state: `OPEN`, `WAIT`, or `LOCKOUT`. |
 | `VS` | Next transmit sequence number. |
 | `VR` | Next receive sequence number. |
-| `CFDP` | Current file-transfer state: `IDLE`, `TX`, `RX`, or `DUPLEX`. |
 
 COP-1 counters:
 
@@ -136,7 +140,26 @@ LINK diagnostics:
 | `UDP` | Last UDP error code (`0` means none), not a count. |
 | `TERM` | Terminal COP-1 failures, normally associated with `EXH`. |
 
+SDLS diagnostics:
+
+The green heading row shows `SDLS` at the left and the reserved `OTAR` status
+position at the right. The two white rows below place receive-session and error
+information on the left, with FSR counts on the right. OTAR status and attempt
+counts display `--` because automatic OTAR is not active in this profile.
+
+| Field | Meaning |
+| --- | --- |
+| `EST` / `ADOPT` | Operational receive sequence state. `EST` enforces the established ARSN window; `ADOPT` permits one authenticated frame to establish a new baseline after an explicit recovery decision. |
+| `TX/RX` | Newly protected transmit frames / successfully authenticated and decoded receive frames. Exact COP-1 retransmissions do not consume another transmit security operation. |
+| `FSR` | FSR OCF occurrences transmitted / valid FSR OCFs received. Retransmission of a stored frame carrying an FSR is counted again. |
+| `R/A/S` | Receive failures classified as replay-window / authentication-tag / security-association or key errors. |
+| `OTAR` | Reserved automatic key-rotation status; `--` when it is not active. |
+| `A/F` | Reserved automatic OTAR attempts / failures; `--/--` when it is not active. |
+
 CFDP diagnostics:
+
+The cyan heading row shows `CFDP` at the left and the current transfer state
+(`IDLE`, `TX`, `RX`, or `DUPLEX`) at the right.
 
 | Field | Meaning |
 | --- | --- |
@@ -144,9 +167,9 @@ CFDP diagnostics:
 | `NAK RX` | CFDP NAKs received. |
 | `RETX` | CFDP-level retransmissions. |
 
-COP-1 counters restart when **SYNC** reinitializes the link. Queue, UDP, and
-CFDP diagnostics run from application startup. More detailed diagnostics are
-written to the serial log.
+COP-1 counters and the SDLS frame, failure, and FSR counters restart when
+**SYNC** reinitializes the link peer. Queue, UDP, and CFDP diagnostics run from
+application startup. More detailed diagnostics are written to the serial log.
 
 ## Protocol Comparison & Tradeoff
 
@@ -229,35 +252,30 @@ CFDP level.
 
 ### SDLS Anti-Replay Initialisation & Recovery
 
-AES-GCM requires IVs to remain unique while a key is in use. The demo’s 96-bit
-IV contains a 64-bit sender component and a 32-bit Anti-Replay Sequence Number
-(ARSN). A reset returns the ARSN to zero, so an established receiver would
-otherwise reject the restarted peer’s frames.
+Each protected frame carries an initialization vector (IV) containing a
+randomized sender value and a 32-bit Anti-Replay Sequence Number (ARSN). Under
+normal operation, the receiver accepts only the next small forward movement of
+the ARSN. This prevents an old authenticated frame from simply being replayed.
 
-At each boot, the sender initializes the upper 64-bit component from entropy.
-It then advances that component using a 64-bit Weyl sequence while incrementing
-the ARSN modulo 2³². The complete IV is authenticated, while receive-side replay
-enforcement is applied to the ARSN.
+A reboot starts the sender's ARSN at zero and chooses a new randomized IV
+component. The peer cannot treat that as ordinary forward progress, so each
+operational receive association begins in `ADOPT` state. **SYNC** deliberately
+returns it to the same state when recovery is required. In `ADOPT`, the first
+frame that passes authentication, decoding, and application delivery establishes
+the new receive baseline. The display then changes from `ADOPT` to `EST`, and
+normal anti-replay checking resumes.
 
-An operational receive association initially enters `ADOPT` state. Local
-**SYNC** also deliberately re-arms this state. While armed, any ARSN may
-establish the new baseline, but only after the frame passes authentication,
-plaintext validation, and delivery. The receiver then returns to anti-replay 
-sequence enforcement.
+Joint startup normally closes `ADOPT` automatically through authenticated peer
+status traffic. If one EYE restarts independently and communication does not
+resume, press **SYNC** on the EYE that remained running while no transfer or
+command is active. SYNC re-arms authenticated baseline adoption and restarts the
+local COP-1 synchronization procedure.
 
-This supports automatic cold-start recovery, but recovery after an independent
-restart currently requires **SYNC** on the peer that remained running. Because
-the demo reuses fixed prototype keys across restarts, a previously recorded
-valid frame could spuriously establish the receive ARSN baseline while the
-receiver is temporarily in `ADOPT` state.
-
-To close this replay opportunity, fresh operational keys should be
-established through OTAR after resynchronization and before ordinary traffic
-resumes. Frames recorded under the previous keys would then fail
-authentication.
-
-OTAR is supported, but the demo does not yet initiate this post-recovery key
-rotation automatically.
+The profile uses fixed prototype operational keys across restarts. Consequently,
+a previously recorded frame that is still valid under a prototype key could
+establish the receive baseline while `ADOPT` is armed. The receiver returns to
+normal anti-replay enforcement immediately after the authenticated baseline is
+accepted.
 
 ## Tagged demonstration versions
 

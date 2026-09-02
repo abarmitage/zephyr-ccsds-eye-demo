@@ -80,6 +80,8 @@ struct demo_link_snapshot {
 	uint32_t sdls_sa_failures;
 	uint32_t fsrs_sent;
 	uint32_t fsrs_received;
+	uint32_t otar_attempts;
+	uint32_t otar_failures;
 	uint8_t fop_state;
 	uint8_t farm_state;
 	uint8_t transmit_sequence;
@@ -98,6 +100,10 @@ struct demo_link_snapshot {
 	bool cfdp_rx_active;
 	bool terminal_failure;
 	bool sdls_adoption_armed;
+	bool otar_pending;
+	bool otar_cutover;
+	bool otar_confirmed;
+	bool otar_timed_out;
 	int peer_error;
 	int route_error;
 	int udp_error;

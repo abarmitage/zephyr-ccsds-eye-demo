@@ -66,7 +66,9 @@ static lv_obj_t *link_duplicate_label;
 static lv_obj_t *link_error_label;
 static lv_obj_t *link_drop_label;
 static lv_obj_t *link_terminal_label;
-static lv_obj_t *link_sdls_label;
+static lv_obj_t *link_sdls_state_label;
+static lv_obj_t *link_sdls_left_label;
+static lv_obj_t *link_sdls_right_label;
 static lv_obj_t *link_cfdp_label;
 static lv_obj_t *link_cfdp_retx_label;
 static lv_obj_t *link_result_label;
@@ -254,15 +256,16 @@ static void refresh_link_screen(void)
 		lv_label_set_text(link_peer_label, "PEER   WAITING");
 		lv_label_set_text(link_peer_report_label, "V(R)  --");
 		lv_label_set_text(link_local_label, "LOCAL  WAITING");
-		lv_label_set_text(link_cfdp_state_label, "CFDP   WAITING");
+		lv_label_set_text(link_cfdp_state_label, "WAITING");
 		lv_label_set_text(link_cop1_summary_label, "WIN --/-  NNR --");
 		lv_label_set_text(link_timeout_label, "TMOUT --");
 		lv_label_set_text(link_duplicate_label, "REJ --  DUP --");
 		lv_label_set_text(link_drop_label, "DROP --");
 		lv_label_set_text(link_terminal_label, "TERM --");
-		lv_label_set_text(link_sdls_label,
-				  IS_ENABLED(CONFIG_EYE_DEMO_LINK_SDLS) ? "SDLS WAITING"
-									 : "SDLS CLEAR");
+		lv_label_set_text(link_sdls_state_label,
+				  IS_ENABLED(CONFIG_EYE_DEMO_LINK_SDLS) ? "OTAR --" : "CLEAR");
+		lv_label_set_text(link_sdls_left_label, "");
+		lv_label_set_text(link_sdls_right_label, "");
 		lv_label_set_text(link_cfdp_retx_label, "RETX --");
 		return;
 	}
@@ -312,11 +315,8 @@ static void refresh_link_screen(void)
 	lv_label_set_text_fmt(link_local_label, "LOCAL  %-8s VS %3u VR %3u", local_text,
 			      snapshot.transmit_sequence, snapshot.receive_sequence);
 	lv_obj_set_style_text_color(link_local_label, local_color, 0);
-	lv_label_set_text_fmt(link_cfdp_state_label, "CFDP   %s", cfdp_text);
-	lv_obj_set_style_text_color(link_cfdp_state_label,
-				 snapshot.cfdp_tx_active || snapshot.cfdp_rx_active ? color_cyan
-										    : color_muted,
-				 0);
+	lv_label_set_text(link_cfdp_state_label, cfdp_text);
+	lv_obj_set_style_text_color(link_cfdp_state_label, color_cyan, 0);
 	lv_label_set_text_fmt(link_recovery_label,
 			      "RETX %u  WAIT %u\n"
 			      "LKOUT %u  EXH %u",
@@ -337,15 +337,19 @@ static void refresh_link_screen(void)
 	lv_label_set_text_fmt(link_terminal_label, "TERM %u",
 			      snapshot.terminal_failures);
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
-	lv_label_set_text_fmt(link_sdls_label,
-			      "SDLS %s TX/RX %u/%u\nR/A/S %u/%u/%u FSR %u/%u",
+	lv_label_set_text(link_sdls_state_label, "OTAR --");
+	lv_label_set_text_fmt(link_sdls_left_label,
+			      "%s  TX/RX %u/%u\nR/A/S %u/%u/%u",
 			      snapshot.sdls_adoption_armed ? "ADOPT" : "EST",
 			      snapshot.sdls_protected, snapshot.sdls_authenticated,
 			      snapshot.sdls_replay_failures,
-			      snapshot.sdls_auth_failures, snapshot.sdls_sa_failures,
+			      snapshot.sdls_auth_failures, snapshot.sdls_sa_failures);
+	lv_label_set_text_fmt(link_sdls_right_label, "FSR %u/%u\nA/F --/--",
 			      snapshot.fsrs_sent, snapshot.fsrs_received);
 #else
-	lv_label_set_text(link_sdls_label, "SDLS CLEAR");
+	lv_label_set_text(link_sdls_state_label, "CLEAR");
+	lv_label_set_text(link_sdls_left_label, "");
+	lv_label_set_text(link_sdls_right_label, "");
 #endif
 	lv_label_set_text_fmt(link_cfdp_label, "NAK TX/RX %u/%u",
 			      snapshot.cfdp_naks_sent, snapshot.cfdp_naks_received);
@@ -390,9 +394,11 @@ static void create_link_screen(void)
 	lv_label_set_text(link_local_label, "LOCAL  WAITING");
 
 	link_cfdp_state_label = lv_label_create(link_screen);
-	lv_obj_set_width(link_cfdp_state_label, 232);
-	lv_obj_set_pos(link_cfdp_state_label, 4, 52);
-	lv_label_set_text(link_cfdp_state_label, "CFDP   WAITING");
+	lv_obj_set_width(link_cfdp_state_label, 180);
+	lv_obj_set_style_text_align(link_cfdp_state_label, LV_TEXT_ALIGN_RIGHT, 0);
+	lv_obj_set_style_text_color(link_cfdp_state_label, color_cyan, 0);
+	lv_obj_align(link_cfdp_state_label, LV_ALIGN_TOP_RIGHT, -4, 166);
+	lv_label_set_text(link_cfdp_state_label, "WAITING");
 
 	label = lv_label_create(link_screen);
 	lv_label_set_text(label, "COP-1");
@@ -435,11 +441,32 @@ static void create_link_screen(void)
 	lv_label_set_text(link_terminal_label, "TERM --");
 	lv_obj_align(link_terminal_label, LV_ALIGN_TOP_RIGHT, -4, 126);
 
-	link_sdls_label = lv_label_create(link_screen);
-	lv_label_set_text(link_sdls_label,
-			  IS_ENABLED(CONFIG_EYE_DEMO_LINK_SDLS) ? "SDLS WAITING" : "SDLS CLEAR");
-	lv_obj_set_style_text_color(link_sdls_label, color_green, 0);
-	lv_obj_set_pos(link_sdls_label, 4, 136);
+	label = lv_label_create(link_screen);
+	lv_label_set_text(label, "SDLS");
+	lv_obj_set_style_text_color(label, color_green, 0);
+	lv_obj_set_pos(label, 4, 136);
+
+	link_sdls_state_label = lv_label_create(link_screen);
+	lv_label_set_text(link_sdls_state_label,
+			  IS_ENABLED(CONFIG_EYE_DEMO_LINK_SDLS) ? "OTAR --" : "CLEAR");
+	lv_obj_set_width(link_sdls_state_label, 180);
+	lv_obj_set_style_text_align(link_sdls_state_label, LV_TEXT_ALIGN_RIGHT, 0);
+	lv_obj_set_style_text_color(link_sdls_state_label, color_green, 0);
+	lv_obj_align(link_sdls_state_label, LV_ALIGN_TOP_RIGHT, -4, 136);
+
+	link_sdls_left_label = lv_label_create(link_screen);
+	lv_label_set_text(link_sdls_left_label, "");
+	lv_label_set_long_mode(link_sdls_left_label, LV_LABEL_LONG_CLIP);
+	lv_obj_set_size(link_sdls_left_label, 152, 18);
+	lv_obj_set_style_text_align(link_sdls_left_label, LV_TEXT_ALIGN_LEFT, 0);
+	lv_obj_set_pos(link_sdls_left_label, 4, 148);
+
+	link_sdls_right_label = lv_label_create(link_screen);
+	lv_label_set_text(link_sdls_right_label, "");
+	lv_label_set_long_mode(link_sdls_right_label, LV_LABEL_LONG_CLIP);
+	lv_obj_set_size(link_sdls_right_label, 76, 18);
+	lv_obj_set_style_text_align(link_sdls_right_label, LV_TEXT_ALIGN_RIGHT, 0);
+	lv_obj_align(link_sdls_right_label, LV_ALIGN_TOP_RIGHT, -4, 148);
 
 	label = lv_label_create(link_screen);
 	lv_label_set_text(label, "CFDP");

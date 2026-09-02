@@ -20,11 +20,11 @@ format, COP-1 composition, directional SPIs and keys, and EYE integration
 before adding operational anti-replay, restart recovery, FSR reporting, or
 OTAR. It is not the final security profile.
 
-Each stage is a completion checkpoint, not merely preparation for the next
-one. At the end of every stage the two-board demo must build, run, transfer
-images in both directions, and recover reliably within the security guarantees
-of that stage. Later stages harden the same working link without depending on
-unfinished work from a subsequent stage.
+Stages 1 and 2 record the incremental checkpoints used to reach the current
+working link. Remaining work is prioritized by the security property it closes;
+diagnostics and documentation are finalization activities rather than separate
+protocol stages. Each security checkpoint must still build, run, transfer
+images in both directions, and recover reliably on the two-board demo.
 
 ## Agreed frame processing
 
@@ -168,40 +168,80 @@ Use the existing 96-bit IV division:
 - Image transfer and injected-loss recovery continue to pass in both
   directions after repeated restart tests.
 
-## Stage 3: OTAR and operational keys
+## Final security milestone: automatic post-recovery OTAR
 
-- Provision a fixed power-on/recovery key on both boards.
-- Use separate operational session keys for the two directions.
-- Define the minimal internal Space Packet exchange carrying the existing SDLS
-  Extended Procedure OTAR and key-activation messages.
-- Use one deterministic OTAR coordinator so both peers do not initiate rotation
-  simultaneously.
-- Rotate to fresh operational keys after cold start or restart recovery, before
-  ordinary image transfer resumes.
-- Block ordinary transfer during key transition and fail closed on timeout or
-  authentication error.
+The remaining security issue is the interval in which fixed prototype keys are
+still in use after adoption. While adoption is armed, a recorded frame that is
+valid under a fixed key can authenticate without matching an established ARSN
+baseline. The randomized upper 64 bits of the IV make accidental IV reuse very
+unlikely, but do not provide freshness for a recorded frame carrying its
+original IV and tag.
 
-### Stage 3 completion checkpoint
+Close this opportunity promptly, without introducing the complete ground-led
+EP key and SA lifecycle into the autonomous EYE link:
 
-- Normal image traffic uses directional operational keys rather than the
-  recovery key.
-- Cold start and independent reset of either board are followed by successful
-  OTAR, activation, and resumed bidirectional transfer.
-- Failed OTAR or activation does not expose ordinary traffic under an
-  unintended key or SA.
-- Several recovery and key-rotation cycles complete without resetting both
-  boards together.
+- After cold-start recovery or explicit **SYNC** causes an adopted frame to be
+  accepted, automatically attempt OTAR as soon as the link can carry it.
+- Use EYE-1 as the deterministic recovery coordinator. Only EYE-1 initiates the
+  automatic recovery OTAR, so simultaneous transactions cannot occur.
+- Generate fresh keys for both traffic directions and send them in one OTAR
+  transaction using the existing EP cryptography and recipient processing.
+- Replace the key material used by the existing, already-operational SAs. Do
+  not add network Key Verification, Key Activation, SA rekey, SA stop, or SA
+  start exchanges merely to reproduce the full operational lifecycle.
+- Treat the matching FSR (carrier SPI, low ARSN octet, and no relevant error)
+  as the recipient's OTAR-acceptance indication. Permit only one coordinator
+  transaction at a time so this deliberately compact correlation is
+  unambiguous.
+- Carry OTAR on a distinct fixed maintenance SA that is never a destination of
+  the OTAR. It must remain usable for exact retransmission until the matching
+  FSR is received and across a later independent reset.
+- Keep peer-status and normal application traffic available during the short
+  transition. This milestone reduces the replay interval through prompt key
+  rotation; it does not introduce a general recovery traffic gate.
+- Use the first successfully authenticated operational traffic under the new
+  key as confirmation of cutover. A failed or timed-out attempt remains visible
+  and retryable through **SYNC** or the still-usable OTAR carrier.
 
-## Stage 4: final diagnostics and documentation
+This is an autonomous recovery policy layered on the existing EP OTAR and FSR
+facilities. It should not be described as implementing the complete EP key and
+SA lifecycle.
 
-- Keep SDLS state and failures visibly separate from COP-1 retransmission and
-  CFDP recovery statistics on the LINK screen.
-- Add concise supported behaviour and workflows to `README.md` only after
-  hardware verification. Keep incomplete status and future work in this plan.
-- Record reusable implementation details in `zephyr-ccsds` design/reference
+### Acceptance checkpoint
+
+- An adopted peer-status or other legitimate packet restores communication and
+  promptly initiates one OTAR transaction.
+- One accepted OTAR installs both directional keys and atomically switches the
+  existing operational SAs to them without stopping or restarting those SAs.
+- Recipient key replacement is atomic: processing failure changes neither key.
+- The recipient reports acceptance through a matching FSR, and the winning
+  originator does not cut over its corresponding local keys before observing
+  that FSR.
+- Loss of the FSR or retransmission of the exact OTAR cannot lock out the
+  key-maintenance path or install the keys twice.
+- The first authenticated operational exchange under the new keys confirms
+  cutover, after which image transfer continues in both directions.
+- Cold start and independent reset of either board recover, rotate keys, and
+  resume bidirectional image transfer without resetting both boards.
+- The implementation and documentation explicitly retain the short residual
+  opportunity for a previously recorded valid frame or OTAR to arrive before
+  the fresh OTAR completes. A nonce/challenge-bound recovery transaction is a
+  possible later hardening step, not part of this milestone.
+
+## Final verification and documentation
+
+Diagnostics and documentation are completion work rather than another protocol
+stage:
+
+- Verify that the existing LINK screen continues to distinguish COP-1, SDLS,
+  OTAR/key-transition, and CFDP behavior during repeated hardware recovery
+  runs.
+- Keep `README.md` focused on supported behavior and operator workflows after
+  hardware verification; keep incomplete design work in this plan.
+- Record reusable recovery/OTAR details in `zephyr-ccsds` design/reference
   documentation.
 - Remove this plan when the final completion criteria are met and supported
-  behaviour is documented.
+  behavior is documented.
 
 ## Final completion criteria
 
@@ -212,33 +252,22 @@ Use the existing 96-bit IV division:
 - Operational anti-replay supports ARSN wraparound and rejects stale traffic.
 - Independent peer reset recovers through an authenticated transition to a new
   boot seed and ARSN zero.
-- OTAR installs fresh directional operational keys before ordinary traffic
-  resumes after recovery.
+- Prompt automatic OTAR replaces both directional fixed keys after recovery,
+  with the matching FSR used as the recipient-acceptance indication.
+- OTAR retransmission and a lost FSR do not lock out the maintenance path.
+- Existing operational SAs continue without a network activation, rekey,
+  stop, or start sequence.
 - Image send and request workflows pass repeatedly in both directions.
 - LINK diagnostics distinguish COP-1, SDLS, and CFDP behaviour.
 
-## Session hand-off checklist
+## Current status
 
-At the end of each development session, update this section only:
-
-- Current stage: Stage 2 software implementation complete; hardware verification
-  pending
-- Last completed item: bounded ARSN receive sessions, authentication-gated boot
-  and local-SYNC adoption, strict Version-1 FSR wire handling, bounded CLCW/FSR
-  scheduling, and categorized LINK diagnostics implemented
-- Tests last run: reusable native suites 416/416, focused SDLS 51/51 and
-  USLP-peer 31/31, EYE demo native suite 18/18, CFDP UDP integration success,
-  loss-recovery, and corruption scenarios passed, and USLP/CFDP UDP integration
-  10/10; EYE-1 and EYE-2 clear builds passed and the final secured
-  `build_both.sh` workflow passed for both roles
-- Hardware state: Stage 2 images have not been flashed or exercised. The Stage 1
-  hardware checkpoint remains the last physical result; all Stage 2 restart,
-  bidirectional transfer, LINK recovery, diagnostics, and varied-boot-IV checks
-  still require the two-board run in the Stage 2 prompt
-- Next item: flash both Stage 2 secured images and complete the two-board
-  hardware verification checklist before declaring Stage 2 complete
-- Known security limitation: with fixed prototype keys, an authenticated frame
-  recorded earlier can establish the receive baseline while adoption is armed;
-  fresh directional operational keys in Stage 3 are required to exclude it
-- Known blocker: Stage 2 completion requires access to both EYE boards and their
-  device paths; no software blocker remains
+- Bounded ARSN sessions, authenticated adoption, FSR/CLCW feedback, and LINK
+  diagnostics are implemented and pass the automated native and board-build
+  checks. The recorded two-board Stage 2 recovery checklist remains pending.
+- The next implementation item is the prompt single-transaction post-recovery
+  OTAR described above. The implementation brief is `sdls_stage3_prompt.md`.
+- Until fresh operational keys are installed, fixed-key adoption can
+  authenticate a recorded valid frame. This milestone shortens that interval;
+  it does not cryptographically prove that the OTAR belongs to the current
+  restart epoch.
