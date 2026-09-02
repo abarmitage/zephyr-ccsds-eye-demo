@@ -13,11 +13,42 @@
 #define DEMO_COMMAND_STATUS_LEN  16u
 #define DEMO_PEER_STATUS_LEN     68u
 #define DEMO_DEDUP_CAPACITY      8u
+#define DEMO_ELECTION_VALUE_LEN  12u
+#define DEMO_ELECTION_ANNOUNCEMENT_LEN 20u
 
 enum demo_message_type {
 	DEMO_MSG_CAPTURE_AND_RETURN = 1,
 	DEMO_MSG_COMMAND_STATUS = 2,
 	DEMO_MSG_PEER_STATUS = 3,
+	DEMO_MSG_ELECTION_CANDIDATE = 4,
+};
+
+enum demo_election_result {
+	DEMO_ELECTION_WAITING = 0,
+	DEMO_ELECTION_WON,
+	DEMO_ELECTION_LOST,
+	DEMO_ELECTION_TIMED_OUT,
+};
+
+struct demo_election_candidate {
+	uint8_t value[DEMO_ELECTION_VALUE_LEN];
+	uint32_t attempt_id;
+	uint16_t spacecraft_id;
+};
+
+struct demo_recovery_election {
+	struct demo_election_candidate local;
+	struct demo_election_candidate peer;
+	uint64_t deadline_ms;
+	enum demo_election_result result;
+	bool active;
+	bool peer_valid;
+};
+
+struct demo_clcw_divergence {
+	uint64_t first_seen_ms;
+	uint8_t report_value;
+	bool observed;
 };
 
 enum demo_command_result {
@@ -137,4 +168,35 @@ enum demo_peer_validation demo_peer_status_validate(const struct demo_peer_statu
 bool demo_dedup_check_and_record(struct demo_dedup_cache *cache, uint64_t entity_id,
 				 uint32_t request_id, uint64_t now_ms, uint64_t retention_ms);
 uint8_t demo_transfer_percent(uint32_t bytes_transferred, uint32_t file_size);
+int demo_election_announcement_encode(
+	const struct demo_election_candidate *candidate, uint8_t *buffer,
+	size_t capacity);
+int demo_election_announcement_decode(
+	const uint8_t *buffer, size_t length,
+	struct demo_election_candidate *candidate);
+int demo_recovery_election_start(
+	struct demo_recovery_election *election,
+	const struct demo_election_candidate *local, uint64_t deadline_ms);
+int demo_recovery_election_receive(
+	struct demo_recovery_election *election, const uint8_t *buffer,
+	size_t length, uint16_t expected_peer_spacecraft_id);
+void demo_recovery_election_tick(struct demo_recovery_election *election,
+				 uint64_t now_ms);
+/** Ordinary application traffic stays paused until mutual new-key confirmation. */
+bool demo_recovery_application_tx_allowed(
+	const struct demo_recovery_election *election, bool confirmed);
+/** Only the winner may send the first operational confirmation after cutover. */
+bool demo_recovery_status_tx_allowed(
+	const struct demo_recovery_election *election, bool cutover,
+	bool confirmed);
+/** A decided election permits exactly one OTAR through successful cutover. */
+bool demo_recovery_otar_submission_allowed(
+	const struct demo_recovery_election *election, bool pending,
+	bool retained_keys, bool cutover);
+/** Mark only the first authenticated operational packet after cutover. */
+bool demo_recovery_mark_confirmed(bool cutover, bool *confirmed);
+/** Confirm a repeated out-of-range CLCW while ignoring one stale datagram. */
+bool demo_clcw_divergence_observe(struct demo_clcw_divergence *state,
+				  bool out_of_range, uint8_t report_value,
+				  uint64_t now_ms, uint64_t confirmation_ms);
 #endif /* CCSDS_EYE_DEMO_PROTOCOL_H */

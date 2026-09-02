@@ -101,10 +101,7 @@ separate final step.
 
 ## Diagnostics
 
-The **LINK** screen groups live state by protocol. Section headings and their
-right-hand state summaries use a common color: COP-1 is amber, LINK is red,
-SDLS is green, and CFDP is cyan. Counters beneath each heading are white. The
-left column is left-aligned and the right column is right-aligned.
+The **LINK** screen groups live state by protocol.
 
 Top link state:
 
@@ -142,11 +139,6 @@ LINK diagnostics:
 
 SDLS diagnostics:
 
-The green heading row shows `SDLS` at the left and the reserved `OTAR` status
-position at the right. The two white rows below place receive-session and error
-information on the left, with FSR counts on the right. OTAR status and attempt
-counts display `--` because automatic OTAR is not active in this profile.
-
 | Field | Meaning |
 | --- | --- |
 | `EST` / `ADOPT` | Operational receive sequence state. `EST` enforces the established ARSN window; `ADOPT` permits one authenticated frame to establish a new baseline after an explicit recovery decision. |
@@ -169,7 +161,7 @@ The cyan heading row shows `CFDP` at the left and the current transfer state
 
 COP-1 counters and the SDLS frame, failure, and FSR counters restart when
 **SYNC** reinitializes the link peer. Queue, UDP, and CFDP diagnostics run from
-application startup. More detailed diagnostics are written to the serial log.
+application startup. Detailed diagnostics are also written to the serial log.
 
 ## Protocol Comparison & Tradeoff
 
@@ -190,29 +182,17 @@ A packet-only version, in which CFDP performs this recovery, is
 preserved by the [`demo-cfdp-packet`](#tagged-demonstration-versions) tag
 described below.
 
-It's interesting to compare the two configurations:
-
-- **demo-uslp-cop1** - lost packets & frames are automatically recovered by
-  COP-1 during transmission. The sender can attempt a higher transmit rate
-  because the receiver's capacity to absorb frames is enforced by
-  COP-1 flow control. This can improve throughput, at the cost of feedback 
-  of CLCW in returned frames, even if the return link is idle.
-- **demo-cfdp-packet** - after splitting the file into packets, and sending,
-  CFDP automatically requests to fill any "gaps" in the received file.
-  This requires CFDP to maintain a record of any missing areas
-  in the received file, which uses memory, especially if missing packets are highly dispersed.
-  Furthermore, the sender must impose a higher, fixed, per-packet transmit
-  delay to ensure it does not overwhelm the receiver. The value of this delay
-  depends on arbitrary platform & link constraints.
-
-Clearly, flow-controlled is preferable, although in the demo, it "hides"
-CFDP's ability to recover missing sections of a file.
+It's interesting to compare the two configurations; clearly, COP-1 flow-controlled
+is preferable, although in the demo, it "hides" CFDP's ability to recover missing
+sections of a file. By comparison,,without flow control CFDP must use an
+arbitrary platform- & link-dependent delay to avoid swamping the receiver.
 
 ## Initial Startup & Link Recovery
 
-The demo represents two autonomous remote entities (“spacecraft”). Its goal is
-to recover and resynchronize with minimal operator intervention after either
-entity resets or loses the link.
+The demo represents two autonomous remote entities (“spacecraft”) communicating
+over a symmetrical using USLP. A goal is to autonomously & securely recover and
+resynchronize with minimal operator intervention after either entity resets or
+loses the link.
 
 Persisting protocol sequence state after every frame would increase storage
 wear and operational complexity. The demo therefore treats COP-1 and SDLS
@@ -220,7 +200,7 @@ session state as volatile and explicitly handles the resulting differences
 between peers after startup or reset.
 
 In the demo configuration, periodic peer-status packets keep COP-1 active
- while the demo is otherwise idle. If an outstanding frame receives no
+while the demo is otherwise idle. If an outstanding frame receives no
 usable acknowledgement after 12 transmission attempts—because either the frame
 or its returning CLCW feedback is lost—the 500 ms retransmission timer reaches
 its limit after approximately six seconds and reports `LINK ERROR`.
@@ -242,40 +222,36 @@ On initial CLCW acquisition after boot, the transmitter adopts the peer’s CLCW
 Report Value and may send `BC_UNLOCK` if the peer is in Lockout. This allows
 normal startup to reconcile automatically.
 
-A later Lockout or retry exhaustion is reported as `LINK ERROR`, rather than
-silently changing established link state. The **LINK** screen then provides
-manual resynchronization controls; normally, pressing **SYNC** is sufficient.
-The demo does not automatically send `SET_VR`.
-
-`TRANSFER FAILED` is reserved for an image transfer that actually failed at
-CFDP level.
+A later Lockout or retry exhaustion is reported as `LINK ERROR`. The **LINK** 
+screen then provides manual resynchronization controls; normally, pressing 
+**SYNC** is sufficient. The demo does not automatically send `SET_VR`.
 
 ### SDLS Anti-Replay Initialisation & Recovery
 
 Each protected frame carries an initialization vector (IV) containing a
 randomized sender value and a 32-bit Anti-Replay Sequence Number (ARSN). Under
-normal operation, the receiver accepts only the next small forward movement of
+normal operation, the receiver accepts only the next forward movement of
 the ARSN. This prevents an old authenticated frame from simply being replayed.
 
 A reboot starts the sender's ARSN at zero and chooses a new randomized IV
 component. The peer cannot treat that as ordinary forward progress, so each
-operational receive association begins in `ADOPT` state. **SYNC** deliberately
+operational receive SA begins in `ADOPT` state. **SYNC** deliberately
 returns it to the same state when recovery is required. In `ADOPT`, the first
 frame that passes authentication, decoding, and application delivery establishes
-the new receive baseline. The display then changes from `ADOPT` to `EST`, and
+the new receive ARSN baseline. The display then changes from `ADOPT` to `EST`, and
 normal anti-replay checking resumes.
 
-Joint startup normally closes `ADOPT` automatically through authenticated peer
+Joint startup normally closes `ADOPT` automatically through authenticated
 status traffic. If one EYE restarts independently and communication does not
 resume, press **SYNC** on the EYE that remained running while no transfer or
-command is active. SYNC re-arms authenticated baseline adoption and restarts the
-local COP-1 synchronization procedure.
+command is active. SYNC re-arms both ARSN adoption, restarts the
+local COP-1 synchronization procedure and a rekeying cycle.
 
-The profile uses fixed prototype operational keys across restarts. Consequently,
-a previously recorded frame that is still valid under a prototype key could
-establish the receive baseline while `ADOPT` is armed. The receiver returns to
-normal anti-replay enforcement immediately after the authenticated baseline is
-accepted.
+In `ADOPT` state, the receiver is vulnerable to replayed authenticated frames -
+therefore we start an immediate automated key rotation to minimize this window.
+This automated key rotation is simplified in comparison with standard SDLS
+procedures, by use of a direct OTAR confirmed by simple FSR, without a
+conventional key activiation, rekey, & start SA cycle. 
 
 ## Tagged demonstration versions
 

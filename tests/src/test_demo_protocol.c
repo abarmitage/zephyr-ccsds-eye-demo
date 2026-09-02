@@ -7,6 +7,165 @@
 #include "demo_image.h"
 #include "demo_protocol.h"
 
+ZTEST(demo_protocol, test_symmetric_recovery_election_order_tie_and_duplicates)
+{
+	struct demo_recovery_election a;
+	struct demo_recovery_election b;
+	struct demo_election_candidate candidate_a = {
+		.value = {0x10u}, .attempt_id = 7u, .spacecraft_id = 0x1001u,
+	};
+	struct demo_election_candidate candidate_b = {
+		.value = {0x20u}, .attempt_id = 3u, .spacecraft_id = 0x1002u,
+	};
+	uint8_t encoded_a[DEMO_ELECTION_ANNOUNCEMENT_LEN];
+	uint8_t encoded_b[DEMO_ELECTION_ANNOUNCEMENT_LEN];
+
+	zassert_equal(demo_election_announcement_encode(
+			      &candidate_a, encoded_a, sizeof(encoded_a)),
+		      sizeof(encoded_a));
+	zassert_equal(demo_election_announcement_encode(
+			      &candidate_b, encoded_b, sizeof(encoded_b)),
+		      sizeof(encoded_b));
+	zassert_ok(demo_recovery_election_start(&a, &candidate_a, 100u));
+	zassert_ok(demo_recovery_election_start(&b, &candidate_b, 100u));
+	zassert_ok(demo_recovery_election_receive(
+		&a, encoded_b, sizeof(encoded_b), candidate_b.spacecraft_id));
+	zassert_ok(demo_recovery_election_receive(
+		&b, encoded_a, sizeof(encoded_a), candidate_a.spacecraft_id));
+	zassert_equal(a.result, DEMO_ELECTION_WON);
+	zassert_equal(b.result, DEMO_ELECTION_LOST);
+
+	/* Exact duplicates are harmless after the decision. */
+	zassert_ok(demo_recovery_election_receive(
+		&a, encoded_b, sizeof(encoded_b), candidate_b.spacecraft_id));
+
+	memcpy(candidate_b.value, candidate_a.value, sizeof(candidate_b.value));
+	zassert_equal(demo_election_announcement_encode(
+			      &candidate_b, encoded_b, sizeof(encoded_b)),
+		      sizeof(encoded_b));
+	zassert_ok(demo_recovery_election_start(&a, &candidate_a, 100u));
+	zassert_ok(demo_recovery_election_start(&b, &candidate_b, 100u));
+	zassert_ok(demo_recovery_election_receive(
+		&a, encoded_b, sizeof(encoded_b), candidate_b.spacecraft_id));
+	zassert_ok(demo_recovery_election_receive(
+		&b, encoded_a, sizeof(encoded_a), candidate_a.spacecraft_id));
+	zassert_equal(a.result, DEMO_ELECTION_WON);
+	zassert_equal(b.result, DEMO_ELECTION_LOST);
+}
+
+ZTEST(demo_protocol, test_recovery_election_idempotence_binding_and_timeout)
+{
+	struct demo_recovery_election election;
+	struct demo_election_candidate local = {
+		.value = {0x80u}, .attempt_id = 1u, .spacecraft_id = 0x1001u,
+	};
+	struct demo_election_candidate peer = {
+		.value = {0x40u}, .attempt_id = 9u, .spacecraft_id = 0x1002u,
+	};
+	uint8_t encoded[DEMO_ELECTION_ANNOUNCEMENT_LEN];
+
+	zassert_ok(demo_recovery_election_start(&election, &local, 50u));
+	zassert_equal(demo_election_announcement_encode(
+			      &peer, encoded, sizeof(encoded)), sizeof(encoded));
+	zassert_equal(demo_recovery_election_receive(
+			      &election, encoded, sizeof(encoded), 0x7777u),
+		      -EINVAL);
+	zassert_ok(demo_recovery_election_receive(
+		&election, encoded, sizeof(encoded), peer.spacecraft_id));
+	zassert_equal(election.result, DEMO_ELECTION_LOST);
+
+	zassert_ok(demo_recovery_election_start(&election, &local, 50u));
+	demo_recovery_election_tick(&election, 49u);
+	zassert_equal(election.result, DEMO_ELECTION_WAITING);
+	demo_recovery_election_tick(&election, 50u);
+	zassert_equal(election.result, DEMO_ELECTION_TIMED_OUT);
+	zassert_equal(demo_recovery_election_receive(
+			      &election, encoded, sizeof(encoded),
+			      peer.spacecraft_id),
+		      -EAGAIN);
+}
+
+ZTEST(demo_protocol, test_recovery_transition_blocks_old_key_traffic)
+{
+	struct demo_recovery_election election = {0};
+
+	zassert_true(demo_recovery_application_tx_allowed(&election, false));
+	zassert_true(demo_recovery_status_tx_allowed(&election, false, false));
+
+	election.active = true;
+	election.result = DEMO_ELECTION_WAITING;
+	zassert_false(demo_recovery_application_tx_allowed(&election, false));
+	zassert_false(demo_recovery_status_tx_allowed(&election, false, false));
+
+	election.result = DEMO_ELECTION_WON;
+	zassert_false(demo_recovery_status_tx_allowed(&election, false, false));
+	zassert_true(demo_recovery_status_tx_allowed(&election, true, false),
+		     "winner must emit the first new-key confirmation");
+	zassert_false(demo_recovery_application_tx_allowed(&election, false));
+
+	election.result = DEMO_ELECTION_LOST;
+	zassert_false(demo_recovery_status_tx_allowed(&election, true, false),
+		      "recipient waits for the winner's new-key confirmation");
+	zassert_true(demo_recovery_status_tx_allowed(&election, true, true));
+	zassert_true(demo_recovery_application_tx_allowed(&election, true));
+
+	election.result = DEMO_ELECTION_TIMED_OUT;
+	zassert_true(demo_recovery_status_tx_allowed(&election, false, false));
+	zassert_true(demo_recovery_application_tx_allowed(&election, false));
+}
+
+ZTEST(demo_protocol, test_recovery_winner_submits_exactly_one_otar)
+{
+	struct demo_recovery_election election = {
+		.result = DEMO_ELECTION_WON,
+		.active = true,
+	};
+
+	zassert_true(demo_recovery_otar_submission_allowed(
+		&election, false, false, false));
+	zassert_false(demo_recovery_otar_submission_allowed(
+		&election, true, true, false));
+	zassert_false(demo_recovery_otar_submission_allowed(
+		&election, false, false, true),
+		      "successful cutover must permanently close this election");
+	election.result = DEMO_ELECTION_LOST;
+	zassert_false(demo_recovery_otar_submission_allowed(
+		&election, false, false, false));
+	election.active = false;
+	election.result = DEMO_ELECTION_WON;
+	zassert_false(demo_recovery_otar_submission_allowed(
+		&election, false, false, false));
+}
+
+ZTEST(demo_protocol, test_recovery_confirmation_is_edge_triggered)
+{
+	bool confirmed = false;
+
+	zassert_false(demo_recovery_mark_confirmed(false, &confirmed));
+	zassert_false(confirmed);
+	zassert_true(demo_recovery_mark_confirmed(true, &confirmed));
+	zassert_true(confirmed);
+	zassert_false(demo_recovery_mark_confirmed(true, &confirmed),
+		      "later operational packets must not trigger status replies");
+}
+
+ZTEST(demo_protocol, test_clcw_divergence_requires_repeated_stable_report)
+{
+	struct demo_clcw_divergence state = {0};
+
+	zassert_false(demo_clcw_divergence_observe(&state, true, 42u, 100u, 250u));
+	zassert_false(demo_clcw_divergence_observe(&state, true, 42u, 200u, 250u),
+		      "a burst of duplicated stale feedback must not resynchronize");
+	zassert_false(demo_clcw_divergence_observe(&state, true, 7u, 400u, 250u),
+		      "a different report must begin a new observation");
+	zassert_true(demo_clcw_divergence_observe(&state, true, 7u, 650u, 250u));
+
+	zassert_false(demo_clcw_divergence_observe(&state, true, 9u, 700u, 250u));
+	zassert_false(demo_clcw_divergence_observe(&state, false, 0u, 800u, 250u));
+	zassert_false(demo_clcw_divergence_observe(&state, true, 9u, 1000u, 250u),
+		      "an accepted CLCW must clear the prior divergence observation");
+}
+
 ZTEST(demo_protocol, test_command_and_status_codecs)
 {
 	uint8_t encoded[DEMO_COMMAND_STATUS_LEN];

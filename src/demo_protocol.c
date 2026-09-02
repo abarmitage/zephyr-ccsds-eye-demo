@@ -226,3 +226,163 @@ uint8_t demo_transfer_percent(uint32_t bytes_transferred, uint32_t file_size)
 	}
 	return (uint8_t)(((uint64_t)MIN(bytes_transferred, file_size) * 100u) / file_size);
 }
+
+int demo_election_announcement_encode(
+	const struct demo_election_candidate *candidate, uint8_t *buffer,
+	size_t capacity)
+{
+	if (candidate == NULL || buffer == NULL ||
+	    capacity < DEMO_ELECTION_ANNOUNCEMENT_LEN ||
+	    candidate->spacecraft_id == 0u || candidate->attempt_id == 0u) {
+		return -EINVAL;
+	}
+	buffer[0] = DEMO_PROTOCOL_VERSION;
+	buffer[1] = DEMO_MSG_ELECTION_CANDIDATE;
+	sys_put_be16(candidate->spacecraft_id, &buffer[2]);
+	memcpy(&buffer[4], candidate->value, DEMO_ELECTION_VALUE_LEN);
+	sys_put_be32(candidate->attempt_id, &buffer[16]);
+	return DEMO_ELECTION_ANNOUNCEMENT_LEN;
+}
+
+int demo_election_announcement_decode(
+	const uint8_t *buffer, size_t length,
+	struct demo_election_candidate *candidate)
+{
+	if (buffer == NULL || candidate == NULL ||
+	    length != DEMO_ELECTION_ANNOUNCEMENT_LEN ||
+	    buffer[0] != DEMO_PROTOCOL_VERSION ||
+	    buffer[1] != DEMO_MSG_ELECTION_CANDIDATE) {
+		return -EINVAL;
+	}
+	memcpy(candidate->value, &buffer[4], DEMO_ELECTION_VALUE_LEN);
+	candidate->spacecraft_id = sys_get_be16(&buffer[2]);
+	candidate->attempt_id = sys_get_be32(&buffer[16]);
+	return candidate->spacecraft_id != 0u && candidate->attempt_id != 0u
+		       ? 0
+		       : -EINVAL;
+}
+
+int demo_recovery_election_start(
+	struct demo_recovery_election *election,
+	const struct demo_election_candidate *local, uint64_t deadline_ms)
+{
+	if (election == NULL || local == NULL || local->spacecraft_id == 0u ||
+	    local->attempt_id == 0u || deadline_ms == 0u) {
+		return -EINVAL;
+	}
+	memset(election, 0, sizeof(*election));
+	election->local = *local;
+	election->deadline_ms = deadline_ms;
+	election->result = DEMO_ELECTION_WAITING;
+	election->active = true;
+	return 0;
+}
+
+int demo_recovery_election_receive(
+	struct demo_recovery_election *election, const uint8_t *buffer,
+	size_t length, uint16_t expected_peer_spacecraft_id)
+{
+	struct demo_election_candidate peer;
+	int comparison;
+	int rc;
+
+	if (election == NULL || !election->active) {
+		return -EAGAIN;
+	}
+	rc = demo_election_announcement_decode(buffer, length, &peer);
+	if (rc != 0 || peer.spacecraft_id != expected_peer_spacecraft_id) {
+		return -EINVAL;
+	}
+	if (election->peer_valid) {
+		return peer.spacecraft_id == election->peer.spacecraft_id &&
+			       peer.attempt_id == election->peer.attempt_id &&
+			       memcmp(peer.value, election->peer.value,
+				      sizeof(peer.value)) == 0
+			       ? 0
+			       : -EALREADY;
+	}
+	if (election->result != DEMO_ELECTION_WAITING) {
+		return -EAGAIN;
+	}
+	election->peer = peer;
+	election->peer_valid = true;
+	comparison = memcmp(election->local.value, peer.value,
+			    sizeof(election->local.value));
+	if (comparison == 0) {
+		comparison = election->local.spacecraft_id < peer.spacecraft_id
+				     ? -1
+				     : 1;
+	}
+	election->result = comparison < 0 ? DEMO_ELECTION_WON
+					: DEMO_ELECTION_LOST;
+	return 0;
+}
+
+void demo_recovery_election_tick(struct demo_recovery_election *election,
+				 uint64_t now_ms)
+{
+	if (election != NULL && election->active &&
+	    election->result == DEMO_ELECTION_WAITING &&
+	    now_ms >= election->deadline_ms) {
+		election->result = DEMO_ELECTION_TIMED_OUT;
+	}
+}
+
+bool demo_recovery_application_tx_allowed(
+	const struct demo_recovery_election *election, bool confirmed)
+{
+	return election == NULL || !election->active || confirmed ||
+	       election->result == DEMO_ELECTION_TIMED_OUT;
+}
+
+bool demo_recovery_status_tx_allowed(
+	const struct demo_recovery_election *election, bool cutover,
+	bool confirmed)
+{
+	if (demo_recovery_application_tx_allowed(election, confirmed)) {
+		return true;
+	}
+	return cutover && election->result == DEMO_ELECTION_WON;
+}
+
+bool demo_recovery_otar_submission_allowed(
+	const struct demo_recovery_election *election, bool pending,
+	bool retained_keys, bool cutover)
+{
+	return election != NULL && election->active &&
+	       election->result == DEMO_ELECTION_WON && !pending &&
+	       !retained_keys && !cutover;
+}
+
+bool demo_recovery_mark_confirmed(bool cutover, bool *confirmed)
+{
+	if (confirmed == NULL || !cutover || *confirmed) {
+		return false;
+	}
+	*confirmed = true;
+	return true;
+}
+
+bool demo_clcw_divergence_observe(struct demo_clcw_divergence *state,
+				  bool out_of_range, uint8_t report_value,
+				  uint64_t now_ms, uint64_t confirmation_ms)
+{
+	if (state == NULL) {
+		return false;
+	}
+	if (!out_of_range) {
+		memset(state, 0, sizeof(*state));
+		return false;
+	}
+	if (!state->observed || state->report_value != report_value) {
+		state->first_seen_ms = now_ms;
+		state->report_value = report_value;
+		state->observed = true;
+		return false;
+	}
+	if (now_ms - state->first_seen_ms < confirmation_ms) {
+		return false;
+	}
+	memset(state, 0, sizeof(*state));
+	return true;
+}

@@ -95,6 +95,9 @@ struct demo_link_snapshot {
 	uint8_t ingress_used;
 	uint8_t ingress_peak;
 	uint8_t ingress_capacity;
+	uint8_t election_state;
+	uint8_t otar_arsn_lsb;
+	uint16_t otar_carrier_spi;
 	bool peer_available;
 	bool cfdp_tx_active;
 	bool cfdp_rx_active;
@@ -104,6 +107,8 @@ struct demo_link_snapshot {
 	bool otar_cutover;
 	bool otar_confirmed;
 	bool otar_timed_out;
+	bool candidate_exchanged;
+	bool otar_fsr_matched;
 	int peer_error;
 	int route_error;
 	int udp_error;

@@ -16,6 +16,7 @@
 #include <ccsds/ccsds_uslp_frame.h>
 #include <ccsds/ccsds_uslp_peer.h>
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+#include <ccsds/ccsds_sdls.h>
 #include <psa/crypto.h>
 #endif
 #include <zephyr/kernel.h>
@@ -38,6 +39,7 @@ LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 #define WORKER_PRIORITY              10
 #define STATUS_PERIOD_MS             2000u
 #define PEER_TIMEOUT_MS              6500u
+#define CLCW_DIVERGENCE_CONFIRM_MS   250u
 #define COMMAND_TIMEOUT_MS           5000u
 #define REQUEST_RETENTION_MS         60000u
 #define WORKER_IDLE_MS               2u
@@ -55,10 +57,31 @@ LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
 #define PEER_SECURITY_OVERHEAD CCSDS_SDLS_PROTECTED_OVERHEAD
 #define EYE_SDLS_ARSN_WINDOW 1u
+#define EYE_SDLS_TX_SPI (IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 1u : 2u)
 #define EYE_SDLS_RX_SPI                                                        \
 	(IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 2u : 1u)
+#define EYE_SDLS_MAINTENANCE_TX_SPI                                            \
+	(IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 3u : 4u)
+#define EYE_SDLS_MAINTENANCE_RX_SPI                                            \
+	(IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 4u : 3u)
+#define EYE_SDLS_EYE1_OPERATIONAL_KEY CONFIG_CCSDS_SDLS_SESSION_KEY_BASE
+#define EYE_SDLS_EYE2_OPERATIONAL_KEY (CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 1u)
+#define EYE_SDLS_EYE1_MAINTENANCE_KEY (CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 2u)
+#define EYE_SDLS_EYE2_MAINTENANCE_KEY (CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 3u)
+#define EYE_SDLS_EYE1_ROTATION_KEY (CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 4u)
+#define EYE_SDLS_EYE2_ROTATION_KEY (CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 5u)
+#define EYE_SDLS_LOCAL_ROTATION_TX_KEY                                         \
+	(IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? EYE_SDLS_EYE1_ROTATION_KEY         \
+						  : EYE_SDLS_EYE2_ROTATION_KEY)
+#define EYE_SDLS_LOCAL_ROTATION_RX_KEY                                         \
+	(IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? EYE_SDLS_EYE2_ROTATION_KEY         \
+						  : EYE_SDLS_EYE1_ROTATION_KEY)
+#define RECOVERY_ELECTION_TIMEOUT_MS 10000u
+#define RECOVERY_OTAR_TIMEOUT_MS 20000u
+#define DEMO_CONTROL_PAYLOAD_MAX CCSDS_SDLS_EP_OTAR_PDU_MAX
 #else
 #define PEER_SECURITY_OVERHEAD 0u
+#define DEMO_CONTROL_PAYLOAD_MAX DEMO_PEER_STATUS_LEN
 #endif
 #define PEER_PACKET_SLOTS            4u
 #define LOCAL_SCID_INDICATION                                                                      \
@@ -90,6 +113,12 @@ BUILD_ASSERT(CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE ==
 BUILD_ASSERT(CFDP_MAX_SYNCHRONOUS_PACKETS == 121u,
 	     "update the bounded CFDP burst analysis when the image or segment "
 	     "size changes");
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+BUILD_ASSERT(CONFIG_CCSDS_SDLS_MAX_SA >= 4,
+	     "Stage 3 requires two operational and two maintenance SAs");
+BUILD_ASSERT(CONFIG_CCSDS_SDLS_MAX_KEYS > EYE_SDLS_EYE2_ROTATION_KEY,
+	     "Stage 3 requires master, operational, maintenance, and staging keys");
+#endif
 
 enum action_type {
 	ACTION_LOCAL_SEND,
@@ -121,6 +150,7 @@ enum router_message_type {
 	ROUTER_CAPTURE_COMMAND,
 	ROUTER_COMMAND_STATUS,
 	ROUTER_PEER_STATUS,
+	ROUTER_RECOVERY_CANDIDATE,
 };
 
 struct rx_datagram {
@@ -226,6 +256,21 @@ static struct demo_sdls_feedback_policy sdls_feedback_policy;
 static uint8_t sdls_plaintext[PEER_PACKET_CAPACITY + CCSDS_USLP_TFDF_HDR_LEN +
 			      CCSDS_SDLS_PROTECTED_OVERHEAD];
 static uint8_t sdls_workspace[CCSDS_USLP_PRIMARY_HDR_LEN + sizeof(sdls_plaintext)];
+static struct demo_recovery_election recovery_election;
+static struct ccsds_sdls_ep_pending_keys recovery_pending_keys;
+static uint8_t recovery_candidate_pdu[DEMO_ELECTION_ANNOUNCEMENT_LEN];
+static uint8_t recovery_otar_pdu[CCSDS_SDLS_EP_OTAR_PDU_MAX];
+static size_t recovery_otar_pdu_len;
+static uint32_t recovery_attempts;
+static uint32_t recovery_failures;
+static uint32_t recovery_otar_arsn;
+static uint64_t recovery_otar_deadline_ms;
+static bool recovery_otar_pending;
+static bool recovery_otar_fsr_matched;
+static bool recovery_otar_cutover;
+static bool recovery_otar_confirmed;
+static bool recovery_otar_timed_out;
+static bool recovery_transport_returned;
 #endif
 static size_t peak_outstanding;
 static uint32_t submit_backpressure;
@@ -238,7 +283,9 @@ static uint32_t validated_image_commits;
 static int terminal_route_error;
 static bool fault_injected;
 static uint32_t link_failure_events;
+static uint32_t link_sync_clcws_observed;
 static bool initial_link_acquisition = true;
+static struct demo_clcw_divergence clcw_divergence;
 static struct demo_image_object image_objects[DEMO_IMAGE_SLOT_COUNT]
 	__attribute__((section(".ext_ram.bss.eye_images"), aligned(32)));
 static struct demo_image_slot image_slots[DEMO_IMAGE_SLOT_COUNT];
@@ -276,10 +323,12 @@ static int start_link_sync(uint64_t now, bool preserve_receive_sequence)
 	}
 	if (rc == 0) {
 		link_sync_phase = LINK_SYNC_CLCW;
+		link_sync_clcws_observed = 0u;
 		peer_ready = false;
 		peak_outstanding = 0u;
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
 		memset(&sdls_feedback_policy, 0, sizeof(sdls_feedback_policy));
+		recovery_election.active = false;
 #endif
 		LOG_INF("USLP COP-1 synchronization started");
 	}
@@ -287,49 +336,158 @@ static int start_link_sync(uint64_t now, bool preserve_receive_sequence)
 }
 
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+static uint16_t select_transmit_spi(void *user_data, const uint8_t *packet,
+				    size_t packet_len)
+{
+	struct ccsds_space_packet decoded;
+
+	ARG_UNUSED(user_data);
+	if (ccsds_space_packet_decode(packet, packet_len, &decoded) == 0 &&
+	    (decoded.apid == CONFIG_EYE_DEMO_RECOVERY_APID ||
+	     decoded.apid == CONFIG_EYE_DEMO_OTAR_APID)) {
+		return EYE_SDLS_MAINTENANCE_TX_SPI;
+	}
+	return EYE_SDLS_TX_SPI;
+}
+
+static void security_receive_committed(void *user_data, uint16_t spi,
+				       uint32_t arsn, bool adopted)
+{
+	ARG_UNUSED(user_data);
+	ARG_UNUSED(arsn);
+	ARG_UNUSED(adopted);
+	if (spi == EYE_SDLS_RX_SPI && demo_recovery_mark_confirmed(
+					       recovery_otar_cutover,
+					       &recovery_otar_confirmed)) {
+		demo_sdls_feedback_confirm_acceptance(&sdls_feedback_policy);
+		next_status_ms = 0u;
+	}
+}
+
+static bool recovery_application_tx_allowed(void)
+{
+	if (recovery_transport_returned) {
+		return false;
+	}
+	return demo_recovery_application_tx_allowed(
+		&recovery_election, recovery_otar_confirmed);
+}
+
+static bool recovery_status_tx_allowed(void)
+{
+	if (recovery_transport_returned) {
+		return false;
+	}
+	return demo_recovery_status_tx_allowed(
+		&recovery_election, recovery_otar_cutover,
+		recovery_otar_confirmed);
+}
+
+static void security_receive_fsr(void *user_data,
+				 const struct ccsds_sdls_fsr *fsr)
+{
+	ARG_UNUSED(user_data);
+	if (recovery_otar_pending &&
+	    fsr->last_spi == EYE_SDLS_MAINTENANCE_TX_SPI &&
+	    fsr->last_arsn_lsb == (uint8_t)recovery_otar_arsn && !fsr->alarm &&
+	    !fsr->bad_sequence && !fsr->bad_mac && !fsr->bad_sa) {
+		recovery_otar_fsr_matched = true;
+	}
+}
+
 static int select_security_ocf(void *user_data, const uint8_t clcw[4],
 			       uint8_t selected_ocf[4])
 {
 	struct ccsds_sdls_ctx *ctx = user_data;
 	struct ccsds_uslp_peer_snapshot snapshot;
+	uint8_t fsr[CCSDS_USLP_OCF_LEN];
 	bool cop_urgent;
 
 	ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
 	cop_urgent = snapshot.fop_state != CCSDS_USLP_FOP_ACTIVE ||
 		     snapshot.farm_state != CCSDS_USLP_FARM_OPEN ||
 		     snapshot.outstanding_frames != 0u;
-	if (ctx->fsr_enabled && demo_sdls_feedback_select_fsr(
-				    &sdls_feedback_policy, clcw, cop_urgent)) {
-		ccsds_sdls_fsr_encode(ctx, selected_ocf);
-	} else {
+	if (!ctx->fsr_enabled) {
 		memcpy(selected_ocf, clcw, CCSDS_USLP_OCF_LEN);
+		return 0;
 	}
+	ccsds_sdls_fsr_encode(ctx, fsr);
+	(void)demo_sdls_feedback_select_fsr(
+		&sdls_feedback_policy, clcw, fsr, cop_urgent, selected_ocf);
 	return 0;
 }
 #endif
 
 static int advance_link_sync(uint64_t now, int peer_rc,
-			     const struct ccsds_uslp_peer_snapshot *snapshot)
+			     struct ccsds_uslp_peer_snapshot *snapshot)
 {
+	bool new_clcw = snapshot->stats.clcws_received != link_sync_clcws_observed &&
+			snapshot->last_clcw_valid;
 	int rc;
 
-	if (link_sync_phase == LINK_SYNC_FAILED) {
-		return peer_rc;
-	}
-	if (peer_rc == -ETIMEDOUT || peer_rc == -ESHUTDOWN) {
+	link_sync_clcws_observed = snapshot->stats.clcws_received;
+	if (peer_rc == -ETIMEDOUT && link_sync_phase != LINK_SYNC_FAILED) {
 		peer_ready = false;
 		link_failure_events++;
 		link_sync_phase = LINK_SYNC_FAILED;
-		LOG_ERR("USLP COP-1 link error: %d (event %u); operator recovery required",
+		LOG_ERR("USLP COP-1 link error: %d (event %u); waiting for peer feedback",
 			peer_rc, link_failure_events);
 		ui_event(DEMO_UI_LINK_FAILED, 0u, peer_rc);
 		trace_link_snapshot("link-terminal");
 		ccsds_cfdp_entity_abort_transactions(
 			&cfdp_service.entity, CCSDS_CFDP_STATUS_INACTIVITY_DETECTED);
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+		if (!recovery_otar_pending) {
+			recovery_election.active = false;
+		}
+#endif
 		return peer_rc;
 	}
-	if (peer_rc != 0) {
+	if (link_sync_phase == LINK_SYNC_FAILED && new_clcw) {
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+		rc = ccsds_sdls_arm_receive_adoption(&sdls_ctx, EYE_SDLS_RX_SPI);
+		if (rc != 0) {
+			return rc;
+		}
+		rc = ccsds_sdls_arm_receive_adoption(
+			&sdls_ctx, EYE_SDLS_MAINTENANCE_RX_SPI);
+		if (rc != 0) {
+			return rc;
+		}
+#endif
+		rc = ccsds_uslp_peer_recover_from_clcw(&peer);
+		if (rc != 0) {
+			return rc;
+		}
+		ccsds_uslp_peer_get_snapshot(&peer, snapshot);
+		if (snapshot->fop_state == CCSDS_USLP_FOP_INITIALIZING_WITH_BC) {
+			link_sync_phase = LINK_SYNC_UNLOCK;
+			LOG_WRN("USLP COP-1 peer returned with dirty CLCW; UNLOCK queued at V(R)=%u",
+				snapshot->transmit_sequence);
+		} else {
+			link_sync_phase = LINK_SYNC_READY;
+			next_status_ms = now;
+			LOG_INF("USLP COP-1 peer returned with clean CLCW; adopted V(R)=%u",
+				snapshot->transmit_sequence);
+		}
+		return 0;
+	}
+	if (peer_rc != 0 && peer_rc != -ESHUTDOWN && peer_rc != -EACCES) {
 		return peer_rc;
+	}
+	if (link_sync_phase == LINK_SYNC_FAILED) {
+		return peer_rc;
+	}
+	if (link_sync_phase == LINK_SYNC_CLCW && new_clcw &&
+	    (snapshot->last_clcw_lockout || snapshot->last_clcw_wait ||
+	     snapshot->last_clcw_retransmit)) {
+		rc = ccsds_uslp_peer_recover_from_clcw(&peer);
+		if (rc == 0) {
+			link_sync_phase = LINK_SYNC_UNLOCK;
+			LOG_WRN("USLP COP-1 dirty startup CLCW; UNLOCK queued at reported V(R)=%u",
+				snapshot->last_clcw_report);
+		}
+		return rc;
 	}
 	if (snapshot->fop_state == CCSDS_USLP_FOP_INITIAL) {
 		if (!initial_link_acquisition) {
@@ -337,7 +495,7 @@ static int advance_link_sync(uint64_t now, int peer_rc,
 			link_sync_phase = LINK_SYNC_FAILED;
 			link_failure_events++;
 			LOG_ERR("USLP COP-1 peer lockout after initial acquisition "
-				"(event %u); operator recovery required",
+				"(event %u); waiting for peer feedback",
 				link_failure_events);
 			ui_event(DEMO_UI_LINK_FAILED, 0u, -EACCES);
 			trace_link_snapshot("link-lockout");
@@ -578,6 +736,62 @@ static int peer_status_router_handler(const struct ccsds_space_packet *packet, v
 	return queue_router_message(ROUTER_PEER_STATUS, packet->payload, packet->payload_len);
 }
 
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+static int recovery_candidate_router_handler(
+	const struct ccsds_space_packet *packet, void *user_data)
+{
+	ARG_UNUSED(user_data);
+	if (packet == NULL || packet->type != CCSDS_PACKET_TYPE_TM ||
+	    packet->payload == NULL ||
+	    packet->payload_len != DEMO_ELECTION_ANNOUNCEMENT_LEN ||
+	    !sdls_ctx.authenticated_rx_dispatching ||
+	    !sdls_ctx.authenticated_rx_valid ||
+	    sdls_ctx.authenticated_rx_spi != EYE_SDLS_MAINTENANCE_RX_SPI) {
+		return -EINVAL;
+	}
+	return queue_router_message(ROUTER_RECOVERY_CANDIDATE, packet->payload,
+				    packet->payload_len);
+}
+
+static int recovery_otar_router_handler(const struct ccsds_space_packet *packet,
+					void *user_data)
+{
+	int rc;
+
+	ARG_UNUSED(user_data);
+	if (packet == NULL || packet->type != CCSDS_PACKET_TYPE_TM ||
+	    packet->payload == NULL || packet->payload_len == 0u ||
+	    packet->payload_len > CCSDS_SDLS_EP_OTAR_PDU_MAX ||
+	    !sdls_ctx.authenticated_rx_dispatching ||
+	    !sdls_ctx.authenticated_rx_valid ||
+	    sdls_ctx.authenticated_rx_spi != EYE_SDLS_MAINTENANCE_RX_SPI) {
+		return -EINVAL;
+	}
+	rc = ccsds_sdls_ep_process_recovery_otar(
+		&sdls_ctx, packet->payload, packet->payload_len,
+		(struct ccsds_sdls_workspace){.data = sdls_workspace,
+						 .capacity = sizeof(sdls_workspace)},
+		EYE_SDLS_TX_SPI, EYE_SDLS_RX_SPI,
+		EYE_SDLS_LOCAL_ROTATION_TX_KEY,
+		EYE_SDLS_LOCAL_ROTATION_RX_KEY);
+	if (rc == 0) {
+		uint8_t acceptance_fsr[CCSDS_USLP_OCF_LEN];
+
+		ccsds_sdls_fsr_encode(&sdls_ctx, acceptance_fsr);
+		demo_sdls_feedback_latch_acceptance(&sdls_feedback_policy,
+						    acceptance_fsr);
+		recovery_otar_cutover = true;
+		recovery_otar_confirmed = false;
+		LOG_INF("SDLS recovery OTAR accepted on maintenance SPI=%u",
+			EYE_SDLS_MAINTENANCE_RX_SPI);
+	} else {
+		recovery_failures++;
+		LOG_ERR("SDLS recovery OTAR rejected: %d", rc);
+	}
+	return rc;
+}
+#endif
+
 static int udp_receive(void *user, const uint8_t *unit, size_t length)
 {
 	struct rx_datagram datagram;
@@ -687,21 +901,72 @@ static int deliver_packet(void *user, const uint8_t *packet, size_t packet_len)
 	return ccsds_profile_input_dispatch_unit(&input_profile, packet, packet_len);
 }
 
+static void recover_from_divergent_clcw(uint64_t now)
+{
+	struct ccsds_uslp_peer_snapshot snapshot;
+	int rc;
+
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+	rc = ccsds_sdls_arm_receive_adoption(&sdls_ctx, EYE_SDLS_RX_SPI);
+	if (rc == 0) {
+		rc = ccsds_sdls_arm_receive_adoption(
+			&sdls_ctx, EYE_SDLS_MAINTENANCE_RX_SPI);
+	}
+	if (rc != 0) {
+		LOG_ERR("SDLS peer-restart adoption arm failed: %d", rc);
+		return;
+	}
+#endif
+	rc = ccsds_uslp_peer_recover_from_clcw(&peer);
+	if (rc != 0) {
+		LOG_ERR("USLP peer-restart CLCW recovery failed: %d", rc);
+		return;
+	}
+	ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
+	peer_ready = false;
+	ccsds_cfdp_entity_abort_transactions(
+		&cfdp_service.entity, CCSDS_CFDP_STATUS_INACTIVITY_DETECTED);
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+	if (!recovery_otar_pending) {
+		recovery_election.active = false;
+	}
+	recovery_transport_returned = true;
+#endif
+	if (snapshot.fop_state == CCSDS_USLP_FOP_INITIALIZING_WITH_BC) {
+		link_sync_phase = LINK_SYNC_UNLOCK;
+		LOG_WRN("USLP repeated divergent CLCW; peer restart detected, UNLOCK queued at V(R)=%u",
+			snapshot.transmit_sequence);
+	} else {
+		link_sync_phase = LINK_SYNC_READY;
+		next_status_ms = now;
+		LOG_WRN("USLP repeated divergent CLCW; peer restart detected, adopted V(R)=%u",
+			snapshot.transmit_sequence);
+	}
+}
+
 static void service_peer_ingress(uint64_t now)
 {
 	struct rx_datagram datagram;
 
 	while (k_msgq_get(&rx_queue, &datagram, K_NO_WAIT) == 0) {
 		atomic_dec(&rx_queue_used);
-		if (link_sync_phase == LINK_SYNC_FAILED) {
-			continue;
-		}
 		/* A delayed or reordered UDP datagram can contain an obsolete CLCW.
 		 * The peer rejects and counts its out-of-window ReportValue, while the
 		 * FOP remains unchanged.  Lack of subsequent acknowledgement progress
 		 * is detected by the normal COP-1 retry-exhaustion path.
 		 */
-		(void)ccsds_uslp_peer_receive(&peer, datagram.data, datagram.length, now);
+		int rc = ccsds_uslp_peer_receive(&peer, datagram.data,
+					 datagram.length, now);
+		struct ccsds_uslp_peer_snapshot snapshot;
+
+		ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
+		if (demo_clcw_divergence_observe(
+			    &clcw_divergence,
+			    rc == -ERANGE && snapshot.last_clcw_valid,
+			    snapshot.last_clcw_report, now,
+			    CLCW_DIVERGENCE_CONFIRM_MS)) {
+			recover_from_divergent_clcw(now);
+		}
 	}
 }
 
@@ -733,13 +998,18 @@ static int submit_packet_owned(const uint8_t *packet, size_t packet_len)
 static int send_cfdp_packet(void *user, const uint8_t *packet, size_t length)
 {
 	ARG_UNUSED(user);
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+	if (!recovery_application_tx_allowed()) {
+		return -EAGAIN;
+	}
+#endif
 	return submit_packet_owned(packet, length);
 }
 
 static int send_space_packet(uint16_t apid, enum ccsds_packet_type type, const uint8_t *payload,
 			     size_t payload_length)
 {
-	uint8_t buffer[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + DEMO_PEER_STATUS_LEN];
+	uint8_t buffer[CCSDS_SPACE_PACKET_PRIMARY_HDR_LEN + DEMO_CONTROL_PAYLOAD_MAX];
 	size_t length;
 	struct ccsds_space_packet packet = {
 		.version = 0u,
@@ -751,7 +1021,20 @@ static int send_space_packet(uint16_t apid, enum ccsds_packet_type type, const u
 		.payload = payload,
 		.payload_len = payload_length,
 	};
-	int rc = ccsds_space_packet_encode(&packet, buffer, sizeof(buffer), &length);
+	int rc;
+
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+	if (apid == CONFIG_EYE_DEMO_PEER_STATUS_APID) {
+		if (!recovery_status_tx_allowed()) {
+			return -EAGAIN;
+		}
+	} else if (apid != CONFIG_EYE_DEMO_RECOVERY_APID &&
+		   apid != CONFIG_EYE_DEMO_OTAR_APID &&
+		   !recovery_application_tx_allowed()) {
+		return -EAGAIN;
+	}
+#endif
+	rc = ccsds_space_packet_encode(&packet, buffer, sizeof(buffer), &length);
 
 	return rc == 0 ? submit_packet_owned(buffer, length) : rc;
 }
@@ -837,6 +1120,11 @@ static int claim_send_operation(const struct send_operation *operation)
 	if (!protocol_ready || !peer_ready) {
 		return -ENETUNREACH;
 	}
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+	if (!recovery_application_tx_allowed()) {
+		return -EBUSY;
+	}
+#endif
 	if (operation_active) {
 		return -EBUSY;
 	}
@@ -957,7 +1245,11 @@ static void process_capture_command(const struct router_message *message, uint64
 	} else if (demo_dedup_check_and_record(&dedup_cache, command.requesting_entity_id,
 					       command.request_id, now, REQUEST_RETENTION_MS)) {
 		result = DEMO_COMMAND_DUPLICATE;
-	} else if (operation_active || !peer_ready) {
+	} else if (operation_active || !peer_ready
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+		   || !recovery_application_tx_allowed()
+#endif
+	) {
 		result = DEMO_COMMAND_BUSY;
 	} else {
 		operation = (struct send_operation){
@@ -992,6 +1284,187 @@ static void process_command_status(const struct router_message *message)
 	}
 	ui_event(DEMO_UI_COMMAND_RESULT, status.request_id, status.result);
 }
+
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+static int start_recovery_election(uint64_t now)
+{
+	struct demo_election_candidate candidate = {
+		.spacecraft_id = CONFIG_EYE_DEMO_LOCAL_SPACECRAFT_ID,
+	};
+	psa_status_t status;
+	int length;
+	int rc;
+
+	if (recovery_election.active || recovery_otar_pending) {
+		return -EALREADY;
+	}
+	recovery_attempts++;
+	if (recovery_attempts == 0u) {
+		recovery_attempts = 1u;
+	}
+	candidate.attempt_id = recovery_attempts;
+	status = psa_generate_random(candidate.value, sizeof(candidate.value));
+	if (status != PSA_SUCCESS) {
+		recovery_failures++;
+		return -EIO;
+	}
+	rc = demo_recovery_election_start(
+		&recovery_election, &candidate,
+		now + RECOVERY_ELECTION_TIMEOUT_MS);
+	if (rc != 0) {
+		recovery_failures++;
+		return rc;
+	}
+	length = demo_election_announcement_encode(
+		&candidate, recovery_candidate_pdu,
+		sizeof(recovery_candidate_pdu));
+	if (length < 0) {
+		recovery_election.active = false;
+		recovery_failures++;
+		return length;
+	}
+	rc = send_space_packet(CONFIG_EYE_DEMO_RECOVERY_APID,
+			       CCSDS_PACKET_TYPE_TM, recovery_candidate_pdu,
+			       (size_t)length);
+	if (rc != 0) {
+		recovery_election.active = false;
+		recovery_failures++;
+		return rc;
+	}
+	recovery_otar_fsr_matched = false;
+	recovery_otar_cutover = false;
+	recovery_otar_confirmed = false;
+	recovery_otar_timed_out = false;
+	LOG_INF("SDLS recovery election attempt=%u candidate submitted on SPI=%u",
+		recovery_attempts, EYE_SDLS_MAINTENANCE_TX_SPI);
+	return 0;
+}
+
+static int accept_recovery_candidate(const struct router_message *message,
+				     uint64_t now)
+{
+	int rc;
+
+	if (!recovery_election.active) {
+		rc = start_recovery_election(now);
+		if (rc != 0) {
+			return rc;
+		}
+	}
+	rc = demo_recovery_election_receive(
+		&recovery_election, message->payload, message->length,
+		CONFIG_EYE_DEMO_PEER_SPACECRAFT_ID);
+	if (rc == -EALREADY && !peer_ready && !recovery_otar_pending) {
+		recovery_election.active = false;
+		rc = start_recovery_election(now);
+		if (rc == 0) {
+			rc = demo_recovery_election_receive(
+				&recovery_election, message->payload, message->length,
+				CONFIG_EYE_DEMO_PEER_SPACECRAFT_ID);
+		}
+	}
+	if (rc == 0 && recovery_election.peer_valid) {
+		LOG_INF("SDLS recovery election attempt=%u result=%s",
+			recovery_attempts,
+			recovery_election.result == DEMO_ELECTION_WON ? "won"
+								      : "lost");
+	}
+	return rc;
+}
+
+static void service_sdls_recovery(uint64_t now)
+{
+	struct ccsds_uslp_peer_snapshot snapshot;
+	const uint16_t destinations[2] = {
+		EYE_SDLS_EYE1_ROTATION_KEY,
+		EYE_SDLS_EYE2_ROTATION_KEY,
+	};
+	int rc;
+
+	if (link_sync_phase == LINK_SYNC_READY &&
+	    (peer_ready || recovery_transport_returned) &&
+	    !operation_active && !cfdp_service.entity.receiver.active &&
+	    pending_request_deadline_ms == 0u && !recovery_election.active &&
+	    !recovery_otar_pending) {
+		ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
+		if (snapshot.outstanding_frames == 0u &&
+		    snapshot.queued_packets == 0u) {
+			if (start_recovery_election(now) == 0) {
+				recovery_transport_returned = false;
+			}
+		}
+	}
+	demo_recovery_election_tick(&recovery_election, now);
+	if (recovery_election.result == DEMO_ELECTION_TIMED_OUT) {
+		if (!recovery_otar_timed_out) {
+			recovery_failures++;
+			recovery_otar_timed_out = true;
+			LOG_ERR("SDLS recovery election attempt=%u timed out",
+				recovery_attempts);
+		}
+		return;
+	}
+	if (demo_recovery_otar_submission_allowed(
+		    &recovery_election, recovery_otar_pending,
+		    recovery_pending_keys.valid, recovery_otar_cutover)) {
+		ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
+		if (snapshot.outstanding_frames != 0u ||
+		    snapshot.queued_packets != 0u) {
+			return;
+		}
+		rc = ccsds_sdls_ep_prepare_recovery_otar(
+			&sdls_ctx, 0u, destinations,
+			(struct ccsds_sdls_workspace){.data = sdls_workspace,
+						 .capacity = sizeof(sdls_workspace)},
+			&recovery_pending_keys, recovery_otar_pdu,
+			sizeof(recovery_otar_pdu), &recovery_otar_pdu_len);
+		if (rc != 0) {
+			recovery_failures++;
+			LOG_ERR("SDLS recovery OTAR preparation failed: %d", rc);
+			return;
+		}
+		recovery_otar_arsn =
+			sdls_ctx.keys[sdls_ctx.sas[EYE_SDLS_MAINTENANCE_TX_SPI - 1u]
+					      .key_slot]
+				.tx_arsn;
+		rc = send_space_packet(CONFIG_EYE_DEMO_OTAR_APID,
+				       CCSDS_PACKET_TYPE_TM, recovery_otar_pdu,
+				       recovery_otar_pdu_len);
+		if (rc != 0) {
+			ccsds_sdls_ep_cancel_pending_keys(&recovery_pending_keys);
+			recovery_failures++;
+			LOG_ERR("SDLS recovery OTAR submission failed: %d", rc);
+			return;
+		}
+		recovery_otar_pending = true;
+		recovery_otar_deadline_ms = now + RECOVERY_OTAR_TIMEOUT_MS;
+		LOG_INF("SDLS recovery OTAR pending carrier SPI=%u ARSN=%u",
+			EYE_SDLS_MAINTENANCE_TX_SPI, recovery_otar_arsn);
+	}
+	if (recovery_otar_pending && recovery_otar_fsr_matched) {
+		rc = ccsds_sdls_ep_commit_pending_keys(
+			&sdls_ctx, &recovery_pending_keys, EYE_SDLS_TX_SPI,
+			EYE_SDLS_RX_SPI, EYE_SDLS_LOCAL_ROTATION_TX_KEY,
+			EYE_SDLS_LOCAL_ROTATION_RX_KEY);
+		if (rc == 0) {
+			recovery_otar_pending = false;
+			recovery_otar_fsr_matched = false;
+			recovery_otar_cutover = true;
+			recovery_otar_confirmed = false;
+			next_status_ms = 0u;
+			LOG_INF("SDLS recovery OTAR matching FSR accepted; operational keys cut over");
+		} else {
+			recovery_failures++;
+			LOG_ERR("SDLS recovery local key cutover failed: %d", rc);
+		}
+	} else if (recovery_otar_pending && now >= recovery_otar_deadline_ms &&
+		   !recovery_otar_timed_out) {
+		recovery_failures++;
+		recovery_otar_timed_out = true;
+		LOG_ERR("SDLS recovery OTAR timed out awaiting matching FSR");
+	}
+}
+#endif
 
 static void process_peer_status(const struct router_message *message, uint64_t now)
 {
@@ -1095,6 +1568,11 @@ static void process_router_messages(uint64_t now)
 			break;
 		case ROUTER_PEER_STATUS:
 			process_peer_status(&message, now);
+			break;
+		case ROUTER_RECOVERY_CANDIDATE:
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+			(void)accept_recovery_candidate(&message, now);
+#endif
 			break;
 		}
 	}
@@ -1254,6 +1732,9 @@ static int process_link_action(enum action_type action, uint64_t now)
 	}
 	if (action == ACTION_LINK_SYNC_TX) {
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+		if (recovery_otar_pending) {
+			return -EBUSY;
+		}
 		rc = ccsds_sdls_arm_receive_adoption(&sdls_ctx, EYE_SDLS_RX_SPI);
 		if (rc == 0) {
 			rc = start_link_sync(now, true);
@@ -1407,7 +1888,18 @@ static void publish_link_snapshot(void)
 		.sdls_sa_failures = peer_state.stats.sdls_sa_failures,
 		.fsrs_sent = peer_state.stats.fsrs_emitted,
 		.fsrs_received = peer_state.stats.fsrs_received,
+		.otar_attempts = recovery_attempts,
+		.otar_failures = recovery_failures,
 		.sdls_adoption_armed = sdls_ctx.sas[EYE_SDLS_RX_SPI - 1u].rx_adoption_armed,
+		.otar_pending = recovery_otar_pending,
+		.otar_cutover = recovery_otar_cutover,
+		.otar_confirmed = recovery_otar_confirmed,
+		.otar_timed_out = recovery_otar_timed_out,
+		.election_state = (uint8_t)recovery_election.result,
+		.otar_arsn_lsb = (uint8_t)recovery_otar_arsn,
+		.otar_carrier_spi = EYE_SDLS_MAINTENANCE_TX_SPI,
+		.candidate_exchanged = recovery_election.peer_valid,
+		.otar_fsr_matched = recovery_otar_fsr_matched,
 #endif
 		.fop_state = (uint8_t)peer_state.fop_state,
 		.farm_state = (uint8_t)peer_state.farm_state,
@@ -1522,6 +2014,26 @@ static const uint8_t prototype_key_eye2_to_eye1[CCSDS_SDLS_AES_KEY_BITS / 8u] = 
 	0xa0, 0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7,
 	0xa8, 0xa9, 0xaa, 0xab, 0xac, 0xad, 0xae, 0xaf,
 };
+static const uint8_t prototype_master_key[CCSDS_SDLS_AES_KEY_BITS / 8u] = {
+	0x41, 0x8d, 0x72, 0x16, 0xbb, 0xe3, 0x09, 0x55,
+	0xca, 0x24, 0x67, 0x90, 0x3d, 0xf1, 0xa8, 0x0c,
+	0x5e, 0x32, 0xd4, 0x7a, 0x11, 0x96, 0xec, 0x63,
+	0x28, 0xb5, 0x40, 0xdf, 0x79, 0x02, 0xad, 0xf8,
+};
+static const uint8_t prototype_maintenance_eye1_to_eye2
+	[CCSDS_SDLS_AES_KEY_BITS / 8u] = {
+		0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38,
+		0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40,
+		0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48,
+		0x49, 0x4a, 0x4b, 0x4c, 0x4d, 0x4e, 0x4f, 0x50,
+	};
+static const uint8_t prototype_maintenance_eye2_to_eye1
+	[CCSDS_SDLS_AES_KEY_BITS / 8u] = {
+		0xb1, 0xb2, 0xb3, 0xb4, 0xb5, 0xb6, 0xb7, 0xb8,
+		0xb9, 0xba, 0xbb, 0xbc, 0xbd, 0xbe, 0xbf, 0xc0,
+		0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8,
+		0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf, 0xd0,
+	};
 
 static psa_status_t import_prototype_key(const uint8_t *bytes,
 					 psa_key_id_t *key_id)
@@ -1542,66 +2054,100 @@ static psa_status_t import_prototype_key(const uint8_t *bytes,
 
 static int initialize_sdls(void)
 {
-	psa_key_id_t eye1_to_eye2;
-	psa_key_id_t eye2_to_eye1;
-	struct ccsds_sdls_key_init keys[2];
-	struct ccsds_sdls_sa_init sas[2];
-	uint16_t tx_spi = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 1u : 2u;
-	uint16_t rx_spi = EYE_SDLS_RX_SPI;
+	const uint8_t *key_material[] = {
+		prototype_master_key,
+		prototype_key_eye1_to_eye2,
+		prototype_key_eye2_to_eye1,
+		prototype_maintenance_eye1_to_eye2,
+		prototype_maintenance_eye2_to_eye1,
+	};
+	const uint16_t key_ids[] = {
+		0u,
+		EYE_SDLS_EYE1_OPERATIONAL_KEY,
+		EYE_SDLS_EYE2_OPERATIONAL_KEY,
+		EYE_SDLS_EYE1_MAINTENANCE_KEY,
+		EYE_SDLS_EYE2_MAINTENANCE_KEY,
+	};
+	psa_key_id_t psa_keys[ARRAY_SIZE(key_material)] = {0};
+	struct ccsds_sdls_key_init keys[ARRAY_SIZE(key_material)];
+	struct ccsds_sdls_sa_init sas[4];
 	psa_status_t status = psa_crypto_init();
 
 	if (status != PSA_SUCCESS) {
 		LOG_ERR("SDLS prototype key initialization failed: %d", status);
 		return -EIO;
 	}
-	status = import_prototype_key(prototype_key_eye1_to_eye2, &eye1_to_eye2);
-	if (status != PSA_SUCCESS) {
-		LOG_ERR("SDLS EYE-1 transmit-key import failed: %d", status);
-		return -EIO;
+	for (size_t i = 0u; i < ARRAY_SIZE(key_material); i++) {
+		status = import_prototype_key(key_material[i], &psa_keys[i]);
+		if (status != PSA_SUCCESS) {
+			LOG_ERR("SDLS prototype key %u import failed: %d",
+				(unsigned int)i, status);
+			for (size_t j = 0u; j < i; j++) {
+				(void)psa_destroy_key(psa_keys[j]);
+			}
+			return -EIO;
+		}
+		keys[i] = (struct ccsds_sdls_key_init){
+			.psa_key_id = psa_keys[i],
+			.key_id = key_ids[i],
+			.state = CCSDS_SDLS_KEY_ACTIVE,
+		};
 	}
-	status = import_prototype_key(prototype_key_eye2_to_eye1, &eye2_to_eye1);
-	if (status != PSA_SUCCESS) {
-		LOG_ERR("SDLS EYE-2 transmit-key import failed: %d", status);
-		(void)psa_destroy_key(eye1_to_eye2);
-		return -EIO;
-	}
-	keys[0] = (struct ccsds_sdls_key_init){
-		.psa_key_id = eye1_to_eye2,
-		.key_id = CONFIG_CCSDS_SDLS_SESSION_KEY_BASE,
-		.state = CCSDS_SDLS_KEY_ACTIVE,
-	};
-	keys[1] = (struct ccsds_sdls_key_init){
-		.psa_key_id = eye2_to_eye1,
-		.key_id = CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 1u,
-		.state = CCSDS_SDLS_KEY_ACTIVE,
-	};
 	sas[0] = (struct ccsds_sdls_sa_init){
-		.spi = tx_spi,
+		.spi = EYE_SDLS_TX_SPI,
 		.key_id = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A)
-				 ? CONFIG_CCSDS_SDLS_SESSION_KEY_BASE
-				 : CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 1u,
+				 ? EYE_SDLS_EYE1_OPERATIONAL_KEY
+				 : EYE_SDLS_EYE2_OPERATIONAL_KEY,
 		.role = CCSDS_SDLS_SA_OPERATIONAL_USLP_TX,
 		.mode = CCSDS_SDLS_MODE_GCM,
 		.state = CCSDS_SDLS_SA_OPERATIONAL,
 		.has_key = true,
 	};
 	sas[1] = (struct ccsds_sdls_sa_init){
-		.spi = rx_spi,
+		.spi = EYE_SDLS_RX_SPI,
 		.key_id = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A)
-				 ? CONFIG_CCSDS_SDLS_SESSION_KEY_BASE + 1u
-				 : CONFIG_CCSDS_SDLS_SESSION_KEY_BASE,
+				 ? EYE_SDLS_EYE2_OPERATIONAL_KEY
+				 : EYE_SDLS_EYE1_OPERATIONAL_KEY,
 		.role = CCSDS_SDLS_SA_OPERATIONAL_USLP_RX,
 		.mode = CCSDS_SDLS_MODE_GCM,
 		.state = CCSDS_SDLS_SA_OPERATIONAL,
 		.has_key = true,
 	};
+	sas[2] = (struct ccsds_sdls_sa_init){
+		.spi = EYE_SDLS_MAINTENANCE_TX_SPI,
+		.key_id = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A)
+				 ? EYE_SDLS_EYE1_MAINTENANCE_KEY
+				 : EYE_SDLS_EYE2_MAINTENANCE_KEY,
+		.role = CCSDS_SDLS_SA_MAINTENANCE_USLP_TX,
+		.mode = CCSDS_SDLS_MODE_GCM,
+		.state = CCSDS_SDLS_SA_OPERATIONAL,
+		.has_key = true,
+	};
+	sas[3] = (struct ccsds_sdls_sa_init){
+		.spi = EYE_SDLS_MAINTENANCE_RX_SPI,
+		.key_id = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A)
+				 ? EYE_SDLS_EYE2_MAINTENANCE_KEY
+				 : EYE_SDLS_EYE1_MAINTENANCE_KEY,
+		.role = CCSDS_SDLS_SA_MAINTENANCE_USLP_RX,
+		.mode = CCSDS_SDLS_MODE_GCM,
+		.state = CCSDS_SDLS_SA_OPERATIONAL,
+		.has_key = true,
+	};
 	ccsds_sdls_init(&sdls_ctx, sas, ARRAY_SIZE(sas), keys, ARRAY_SIZE(keys));
-	sdls_ctx.sas[rx_spi - 1u].rx_window = EYE_SDLS_ARSN_WINDOW;
+	sdls_ctx.sas[EYE_SDLS_RX_SPI - 1u].rx_window = EYE_SDLS_ARSN_WINDOW;
+	sdls_ctx.sas[EYE_SDLS_MAINTENANCE_RX_SPI - 1u].rx_window =
+		EYE_SDLS_ARSN_WINDOW;
+	if (ccsds_sdls_arm_receive_adoption(&sdls_ctx, EYE_SDLS_RX_SPI) != 0 ||
+	    ccsds_sdls_arm_receive_adoption(
+		    &sdls_ctx, EYE_SDLS_MAINTENANCE_RX_SPI) != 0) {
+		return -EINVAL;
+	}
 	ccsds_sdls_fsr_set_enabled(&sdls_ctx, true);
 	memset(&sdls_feedback_policy, 0, sizeof(sdls_feedback_policy));
-	LOG_WRN("SDLS Stage 2 fixed-key profile: ARSN window=%u; authenticated "
+	LOG_WRN("SDLS recovery profile: ARSN window=%u; fixed maintenance SPI TX=%u RX=%u; "
 		"adoption permits valid recorded traffic while armed",
-		EYE_SDLS_ARSN_WINDOW);
+		EYE_SDLS_ARSN_WINDOW, EYE_SDLS_MAINTENANCE_TX_SPI,
+		EYE_SDLS_MAINTENANCE_RX_SPI);
 	return 0;
 }
 #endif
@@ -1666,7 +2212,10 @@ static int initialize_protocol(void)
 		},
 		.plaintext = sdls_plaintext,
 		.plaintext_capacity = sizeof(sdls_plaintext),
-		.transmit_spi = IS_ENABLED(CONFIG_EYE_DEMO_ROLE_A) ? 1u : 2u,
+		.transmit_spi = EYE_SDLS_TX_SPI,
+		.select_transmit_spi = select_transmit_spi,
+		.receive_committed = security_receive_committed,
+		.receive_fsr = security_receive_fsr,
 	};
 	peer_config.select_ocf = select_security_ocf;
 	peer_config.select_ocf_user_data = &sdls_ctx;
@@ -1706,6 +2255,16 @@ static int initialize_protocol(void)
 	rc = rc == 0 ? ccsds_router_register_apid(&router, CONFIG_EYE_DEMO_PEER_STATUS_APID,
 						  peer_status_router_handler, NULL)
 		     : rc;
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+	rc = rc == 0 ? ccsds_router_register_apid(
+				 &router, CONFIG_EYE_DEMO_RECOVERY_APID,
+				 recovery_candidate_router_handler, NULL)
+		     : rc;
+	rc = rc == 0 ? ccsds_router_register_apid(
+				 &router, CONFIG_EYE_DEMO_OTAR_APID,
+				 recovery_otar_router_handler, NULL)
+		     : rc;
+#endif
 	return rc == 0 ? ccsds_udp_start(&udp) : rc;
 }
 
@@ -1806,7 +2365,7 @@ static void worker(void *p1, void *p2, void *p3)
 		process_cfdp_events(now);
 		if (protocol_ready) {
 			process_actions(now);
-			if (link_sync_phase != LINK_SYNC_FAILED) {
+			{
 				int peer_rc = ccsds_uslp_peer_tick(&peer, now);
 				struct ccsds_uslp_peer_snapshot snapshot;
 
@@ -1816,6 +2375,9 @@ static void worker(void *p1, void *p2, void *p3)
 				peak_outstanding =
 					MAX(peak_outstanding, snapshot.outstanding_frames);
 			}
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+			service_sdls_recovery(now);
+#endif
 			if (now >= next_cfdp_poll_ms) {
 				ccsds_cfdp_service_poll(&cfdp_service, now);
 				next_cfdp_poll_ms = now + CFDP_POLL_MS;

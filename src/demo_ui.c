@@ -337,15 +337,35 @@ static void refresh_link_screen(void)
 	lv_label_set_text_fmt(link_terminal_label, "TERM %u",
 			      snapshot.terminal_failures);
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
-	lv_label_set_text(link_sdls_state_label, "OTAR --");
+	const char *otar_text = snapshot.otar_confirmed
+				? "OTAR CONFIRMED"
+				: (snapshot.otar_cutover
+					   ? "OTAR CUTOVER"
+					   : (snapshot.otar_pending
+						      ? "OTAR PENDING"
+						      : (snapshot.otar_timed_out
+								 ? "OTAR TIMEOUT"
+								 : (snapshot.election_state ==
+									    DEMO_ELECTION_WON
+									    ? "ELECT WON"
+									    : (snapshot.election_state ==
+										       DEMO_ELECTION_LOST
+										       ? "ELECT LOST"
+									       : "ELECT WAIT")))));
+
+	lv_label_set_text(link_sdls_state_label, otar_text);
 	lv_label_set_text_fmt(link_sdls_left_label,
 			      "%s  TX/RX %u/%u\nR/A/S %u/%u/%u",
 			      snapshot.sdls_adoption_armed ? "ADOPT" : "EST",
 			      snapshot.sdls_protected, snapshot.sdls_authenticated,
 			      snapshot.sdls_replay_failures,
 			      snapshot.sdls_auth_failures, snapshot.sdls_sa_failures);
-	lv_label_set_text_fmt(link_sdls_right_label, "FSR %u/%u\nA/F --/--",
-			      snapshot.fsrs_sent, snapshot.fsrs_received);
+	lv_label_set_text_fmt(link_sdls_right_label,
+			      "FSR %u/%u\nA/F %u/%u S%u:%02x%s",
+			      snapshot.fsrs_sent, snapshot.fsrs_received,
+			      snapshot.otar_attempts, snapshot.otar_failures,
+			      snapshot.otar_carrier_spi, snapshot.otar_arsn_lsb,
+			      snapshot.otar_fsr_matched ? "*" : "");
 #else
 	lv_label_set_text(link_sdls_state_label, "CLEAR");
 	lv_label_set_text(link_sdls_left_label, "");
