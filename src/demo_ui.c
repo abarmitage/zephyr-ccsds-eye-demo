@@ -27,10 +27,12 @@ LOG_MODULE_REGISTER(eye_ui, CONFIG_LOG_DEFAULT_LEVEL);
 #define TC_ANIMATION_MS       250U
 #define COMPLETION_HOLD_MS    3000U
 #define LINK_REFRESH_MS       1000U
+#define MAIN_LINK_REFRESH_MS  250U
 
 enum demo_state {
 	DEMO_BOOT,
 	DEMO_PEER_ABSENT_STATE,
+	DEMO_LINK_RECOVERY_STATE,
 	DEMO_IDLE,
 	DEMO_TX,
 	DEMO_RX,
@@ -92,6 +94,7 @@ static bool tc_incoming;
 static bool completion_pending;
 static enum demo_transfer_direction completion_direction;
 static uint32_t next_link_refresh_ms;
+static uint32_t next_main_link_refresh_ms;
 
 static const char *link_action_name(enum demo_link_action action)
 {
@@ -161,6 +164,11 @@ static void set_state(enum demo_state next, uint32_t now_ms)
 		set_activity(false, false);
 		lv_label_set_text(status_label, "PEER UNAVAILABLE");
 		break;
+	case DEMO_LINK_RECOVERY_STATE:
+		set_activity(false, false);
+		lv_label_set_text(status_label, "LINK RECOVERING");
+		lv_obj_set_style_text_color(status_label, color_amber, 0);
+		break;
 	case DEMO_IDLE:
 		set_activity(false, false);
 		lv_label_set_text(status_label, "READY  /  PEER OK");
@@ -210,9 +218,55 @@ static void set_state(enum demo_state next, uint32_t now_ms)
 		break;
 	}
 
-	if (state != DEMO_COMPLETE && state != DEMO_FAILED) {
+	if (state != DEMO_COMPLETE && state != DEMO_FAILED && state != DEMO_LINK_RECOVERY_STATE) {
 		lv_obj_set_style_text_color(status_label, color_text, 0);
 	}
+}
+
+static const char *recovery_phase_text(uint8_t phase)
+{
+	switch (phase) {
+	case DEMO_LINK_RECOVERY_WAIT_PEER:
+		return "WAITING FOR PEER";
+	case DEMO_LINK_RECOVERY_CONVERGING:
+		return "LINK RECOVERING";
+	case DEMO_LINK_RECOVERY_ELECTION:
+		return "RECOVERY ELECTION";
+	case DEMO_LINK_RECOVERY_OTAR:
+		return "OTAR RECOVERY";
+	case DEMO_LINK_RECOVERY_CONFIRMING:
+		return "OTAR CONFIRMING";
+	default:
+		return NULL;
+	}
+}
+
+static void refresh_main_link_status(uint32_t now_ms)
+{
+	struct demo_link_snapshot snapshot;
+	const char *text;
+
+	if (state != DEMO_PEER_ABSENT_STATE && state != DEMO_LINK_RECOVERY_STATE &&
+	    state != DEMO_IDLE) {
+		return;
+	}
+	if (!demo_service_get_link_snapshot(&snapshot)) {
+		return;
+	}
+	if (snapshot.peer_available && snapshot.recovery_phase == DEMO_LINK_RECOVERY_NONE) {
+		if (state != DEMO_IDLE) {
+			set_state(DEMO_IDLE, now_ms);
+		}
+		return;
+	}
+	text = recovery_phase_text(snapshot.recovery_phase);
+	if (text == NULL) {
+		text = "WAITING FOR PEER";
+	}
+	if (state != DEMO_LINK_RECOVERY_STATE) {
+		set_state(DEMO_LINK_RECOVERY_STATE, now_ms);
+	}
+	lv_label_set_text(status_label, text);
 }
 
 static void update_packet(lv_obj_t *packet, lv_obj_t *bar, uint32_t progress, bool reverse)
@@ -269,9 +323,12 @@ static void refresh_link_screen(void)
 		lv_label_set_text(link_cfdp_retx_label, "RETX --");
 		return;
 	}
-	if (snapshot.terminal_failure) {
-		peer_text = "FAILED";
-		peer_color = color_red;
+	if (snapshot.recovery_phase == DEMO_LINK_RECOVERY_WAIT_PEER) {
+		peer_text = "WAIT PEER";
+		peer_color = color_amber;
+	} else if (snapshot.recovery_phase != DEMO_LINK_RECOVERY_NONE) {
+		peer_text = "RECOVERING";
+		peer_color = color_amber;
 	} else if (snapshot.fop_state == CCSDS_USLP_FOP_INITIAL) {
 		peer_text = "LOCKOUT";
 		peer_color = color_red;
@@ -337,21 +394,27 @@ static void refresh_link_screen(void)
 	lv_label_set_text_fmt(link_terminal_label, "TERM %u",
 			      snapshot.terminal_failures);
 #if defined(CONFIG_EYE_DEMO_LINK_SDLS)
-	const char *otar_text = snapshot.otar_confirmed
+	const char *otar_text;
+
+	if (snapshot.recovery_phase == DEMO_LINK_RECOVERY_WAIT_PEER) {
+		otar_text = "WAIT PEER";
+	} else if (snapshot.recovery_phase == DEMO_LINK_RECOVERY_CONVERGING) {
+		otar_text = "LINK RECOVERY";
+	} else if (snapshot.recovery_phase == DEMO_LINK_RECOVERY_ELECTION) {
+		otar_text =
+			snapshot.election_state == DEMO_ELECTION_WON
+				? "ELECT WON"
+				: (snapshot.election_state == DEMO_ELECTION_LOST ? "ELECT LOST"
+										 : "ELECT WAIT");
+	} else if (snapshot.recovery_phase == DEMO_LINK_RECOVERY_OTAR) {
+		otar_text = "OTAR PENDING";
+	} else if (snapshot.recovery_phase == DEMO_LINK_RECOVERY_CONFIRMING) {
+		otar_text = "OTAR CONFIRM";
+	} else {
+		otar_text = snapshot.otar_confirmed
 				? "OTAR CONFIRMED"
-				: (snapshot.otar_cutover
-					   ? "OTAR CUTOVER"
-					   : (snapshot.otar_pending
-						      ? "OTAR PENDING"
-						      : (snapshot.otar_timed_out
-								 ? "OTAR TIMEOUT"
-								 : (snapshot.election_state ==
-									    DEMO_ELECTION_WON
-									    ? "ELECT WON"
-									    : (snapshot.election_state ==
-										       DEMO_ELECTION_LOST
-										       ? "ELECT LOST"
-									       : "ELECT WAIT")))));
+				: (snapshot.otar_timed_out ? "OTAR TIMEOUT" : "OTAR --");
+	}
 
 	lv_label_set_text(link_sdls_state_label, otar_text);
 	lv_label_set_text_fmt(link_sdls_left_label,
@@ -785,8 +848,8 @@ void demo_ui_handle_event(const struct demo_ui_event *event)
 		lv_label_set_text_fmt(status_label, "PEER CONFIG ERROR %d", event->detail);
 		break;
 	case DEMO_UI_LINK_FAILED:
-		set_state(DEMO_FAILED, now);
-		lv_label_set_text(status_label, "LINK ERROR");
+		set_state(DEMO_LINK_RECOVERY_STATE, now);
+		lv_label_set_text(status_label, "WAITING FOR PEER");
 		break;
 	case DEMO_UI_TC_TX:
 		tc_incoming = false;
@@ -913,6 +976,10 @@ void demo_ui_tick(uint32_t now_ms)
 		refresh_link_screen();
 		next_link_refresh_ms = now_ms + LINK_REFRESH_MS;
 	}
+	if (!demo_ui_link_active() && now_ms >= next_main_link_refresh_ms) {
+		refresh_main_link_status(now_ms);
+		next_main_link_refresh_ms = now_ms + MAIN_LINK_REFRESH_MS;
+	}
 
 	if (completion_pending && elapsed >= TRANSFER_ANIMATION_MS) {
 		completion_pending = false;
@@ -941,6 +1008,7 @@ void demo_ui_tick(uint32_t now_ms)
 	case DEMO_IDLE:
 	case DEMO_BOOT:
 	case DEMO_PEER_ABSENT_STATE:
+	case DEMO_LINK_RECOVERY_STATE:
 	case DEMO_VERIFYING_STATE:
 		break;
 	}

@@ -11,12 +11,14 @@ CLCW feedback caused by transfer traffic is immediate.
 
 The goal is to demonstrate [CCSDS for Zephyr](https://github.com/abarmitage/zephyr-ccsds),
 and to explore protocol tradeoffs when satellites use symmetrical flow-controlled
-communication over USLP for bulk or high-rate data on inter-satellite links. 
-One question is how far peers should autonomously recover and renchronize after 
+communication over USLP for bulk or high-rate data on inter-satellite links.
+One question is how far peers should autonomously recover and resynchronize after
 disruption or link failure.
 
 SDLS security (GCM) authentication & encryption is used, anti-replay sequencing is enforced.
-Automated recovery on link loss is discussed [below.](#sdls-anti-replay-initialisation--recovery)
+
+Automated recovery of COP-1, ARSN sequencing and key rotation on link loss is discussed 
+[below.](#sdls-anti-replay-initialisation--recovery)
 
 ## Controls
 
@@ -37,10 +39,8 @@ not replace the last valid image.
 
 ![ESP32-S3-EYE button locations and display layout](assets/eye-demo-guide.svg)
 
-The display is "egocentric" with the current board on the left and remote board
-on the right. 
-
-EYE-1 is shown in blue, EYE-2 is always orange
+The display places the current board on the left and remote board
+on the right. On both boards EYE-1 is shown in blue, EYE-2 in orange.
 
 ## Configure
 
@@ -107,7 +107,7 @@ Top link state:
 
 | Field | Meaning |
 | --- | --- |
-| `PEER` | Local transmit-side COP-1 state: `OK`, `UNAVAILABLE`, `SYNC`, `CONTROL`, `RETRANSMIT`, `WAIT/RETX`, `LOCKOUT`, or `FAILED`. |
+| `PEER` | Local transmit-side COP-1 state: `OK`, `WAIT PEER`, `RECOVERING`, `SYNC`, `CONTROL`, `RETRANSMIT`, `WAIT/RETX`, or `LOCKOUT`. `WAIT PEER` and `RECOVERING` are automatic recovery states, not permanent failures. |
 | `V(R)` | Report Value in the latest CLCW received from the peer. |
 | `LOCAL` | Local receive-side COP-1 state: `OPEN`, `WAIT`, or `LOCKOUT`. |
 | `VS` | Next transmit sequence number. |
@@ -120,7 +120,7 @@ COP-1 counters:
 | `WIN` | Outstanding frames / maximum transmit window (K). |
 | `NNR` | Oldest unacknowledged transmit sequence number. |
 | `RETX` | Frames retransmitted. |
-| `TMOUT` | Retransmission-timer expirations. A timeout starts recovery but is not itself a terminal failure. |
+| `TMOUT` | Retransmission-timer expirations. Each timeout drives COP-1 retransmission; repeated timeouts can exhaust the retry limit and start link recovery. |
 | `WAIT` | WAIT conditions entered locally or reported by the peer. |
 | `LKOUT` | Local or peer lockout transitions. |
 | `EXH` | COP-1 retry-limit exhaustion. |
@@ -141,12 +141,12 @@ SDLS diagnostics:
 
 | Field | Meaning |
 | --- | --- |
-| `EST` / `ADOPT` | Operational receive sequence state. `EST` enforces the established ARSN window; `ADOPT` permits one authenticated frame to establish a new baseline after an explicit recovery decision. |
+| `EST` / `ADOPT` | Operational receive sequence state. `EST` enforces the established ARSN window; `ADOPT` permits one authenticated frame to establish a new baseline during startup or explicit recovery. |
 | `TX/RX` | Newly protected transmit frames / successfully authenticated and decoded receive frames. Exact COP-1 retransmissions do not consume another transmit security operation. |
 | `FSR` | FSR OCF occurrences transmitted / valid FSR OCFs received. Retransmission of a stored frame carrying an FSR is counted again. |
 | `R/A/S` | Receive failures classified as replay-window / authentication-tag / security-association or key errors. |
-| `OTAR` | Reserved automatic key-rotation status; `--` when it is not active. |
-| `A/F` | Reserved automatic OTAR attempts / failures; `--/--` when it is not active. |
+| `OTAR` | Automatic recovery and key-rotation phase: waiting for the peer, recovering the link, electing the OTAR sender, awaiting OTAR acceptance, confirming the new operational keys, or confirmed. |
+| `A/F` | Automatic recovery-election/OTAR attempts and failures. |
 
 CFDP diagnostics:
 
@@ -184,13 +184,13 @@ described below.
 
 It's interesting to compare the two configurations; clearly, COP-1 flow-controlled
 is preferable, although in the demo, it "hides" CFDP's ability to recover missing
-sections of a file. By comparison,,without flow control CFDP must use an
-arbitrary platform- & link-dependent delay to avoid swamping the receiver.
+sections of a file. By comparison, without flow control CFDP must use an
+arbitrary platform- and link-dependent delay to avoid swamping the receiver.
 
 ## Initial Startup & Link Recovery
 
 The demo represents two autonomous remote entities (“spacecraft”) communicating
-over a symmetrical using USLP. A goal is to autonomously & securely recover and
+over a symmetrical USLP link. A goal is to autonomously and securely recover and
 resynchronize with minimal operator intervention after either entity resets or
 loses the link.
 
@@ -202,13 +202,14 @@ between peers after startup or reset.
 In the demo configuration, periodic peer-status packets keep COP-1 active
 while the demo is otherwise idle. If an outstanding frame receives no
 usable acknowledgement after 12 transmission attempts—because either the frame
-or its returning CLCW feedback is lost—the 500 ms retransmission timer reaches
-its limit after approximately six seconds and reports `LINK ERROR`.
+or its returning CLCW feedback is lost—the configured 1.5-second retransmission
+timer eventually exhausts its retry limit. The display changes to `WAITING FOR
+PEER` while the service continues looking for returning CLCW feedback.
 
 With UDP over Wi-Fi, this is occasionally observed after the demo has been idle
 for several hours. These naturally occurring link failures are useful for
 exercising and demonstrating the resynchronization and recovery procedures
-under realistic conditions. The goal of the demo is not to eliminate link errors, 
+under realistic conditions. The goal of the demo is not to eliminate link errors,
 but to explore how flow control and security can be maintained—and how the link
 can recover predictably with minimum intervention—when errors occur.
 
@@ -222,9 +223,11 @@ On initial CLCW acquisition after boot, the transmitter adopts the peer’s CLCW
 Report Value and may send `BC_UNLOCK` if the peer is in Lockout. This allows
 normal startup to reconcile automatically.
 
-A later Lockout or retry exhaustion is reported as `LINK ERROR`. The **LINK** 
-screen then provides manual resynchronization controls; normally, pressing 
-**SYNC** is sufficient. The demo does not automatically send `SET_VR`.
+A later Lockout or retry exhaustion starts automatic recovery. The main display
+shows `WAITING FOR PEER` while no usable feedback is arriving and `LINK
+RECOVERING` while COP-1 is converging. The **LINK** screen provides manual
+resynchronization controls as a fallback, but they are not normally required.
+The demo does not automatically send `SET_VR`.
 
 ### SDLS Anti-Replay Initialisation & Recovery
 
@@ -233,25 +236,108 @@ randomized sender value and a 32-bit Anti-Replay Sequence Number (ARSN). Under
 normal operation, the receiver accepts only the next forward movement of
 the ARSN. This prevents an old authenticated frame from simply being replayed.
 
-A reboot starts the sender's ARSN at zero and chooses a new randomized IV
+A solution could be to save the ARSN state to non-volatile memory with every
+successfully authenticated frame, however this could be slow and lead to memory
+wear. Instead we investigate an automated sequence without persistent ARSNs.
+
+A reboot restarts the ARSN at zero and chooses a new randomized IV
 component. The peer cannot treat that as ordinary forward progress, so each
-operational receive SA begins in `ADOPT` state. **SYNC** deliberately
-returns it to the same state when recovery is required. In `ADOPT`, the first
+operational receive SA begins in `ADOPT` state. In `ADOPT`, the first
 frame that passes authentication, decoding, and application delivery establishes
-the new receive ARSN baseline. The display then changes from `ADOPT` to `EST`, and
-normal anti-replay checking resumes.
+the new receive ARSN baseline. 
 
 Joint startup normally closes `ADOPT` automatically through authenticated
-status traffic. If one EYE restarts independently and communication does not
-resume, press **SYNC** on the EYE that remained running while no transfer or
-command is active. SYNC re-arms both ARSN adoption, restarts the
-local COP-1 synchronization procedure and a rekeying cycle.
+status traffic. If either EYE subsequently restarts, both sides automatically
+reconcile COP-1, re-arm adoption where required, and rotate the two operational
+traffic keys. 
 
-In `ADOPT` state, the receiver is vulnerable to replayed authenticated frames -
-therefore we start an immediate automated key rotation to minimize this window.
-This automated key rotation is simplified in comparison with standard SDLS
-procedures, by use of a direct OTAR confirmed by simple FSR, without a
-conventional key activiation, rekey, & start SA cycle. 
+**SYNC** trggers return to the same state when recovery is required.
+**SYNC** is a fallback operator action; it should not be needed
+while the displayed recovery sequence is still progressing.
+
+The main-screen recovery states are:
+
+| State | Meaning |
+| --- | --- |
+| `WAITING FOR PEER` | No usable peer feedback is currently arriving. The service continues listening and will resume automatically when the peer returns. |
+| `LINK RECOVERING` | Peer feedback has returned and COP-1 is setting its transmit sequence from the peer's CLCW Report Value or completing control-frame synchronization. This is distinct from SDLS `ADOPT`. |
+| `RECOVERY ELECTION` | Both EYEs exchange authenticated random candidates over their fixed maintenance SAs. The winner becomes the sole OTAR sender; the loser waits for that OTAR. This state also includes reliable candidate delivery and acknowledgement, so it may remain visible for several seconds. |
+| `OTAR RECOVERY` | The elected winner has submitted one OTAR carrying fresh keys for both operational directions and is awaiting the matching FSR acceptance indication. |
+| `OTAR CONFIRMING` | The new operational keys have been installed; the EYE is waiting for authenticated new-key traffic that proves its peer has also cut over. |
+| `READY / PEER OK` | Authenticated peer status is flowing under the current operational keys and normal commands and transfers are enabled. |
+
+The following example shows EYE-2 restarting and EYE-1 winning the random
+election. The procedure is symmetric: either EYE may restart, return first, or
+win the election.
+
+```mermaid
+sequenceDiagram
+    participant E1 as EYE-1
+    participant E2 as EYE-2 (restarting)
+
+    Note over E1,E2: WAITING FOR PEER
+    E2->>E2: Reinitialize volatile COP-1 and SDLS state
+    Note right of E2: Operational and recovery RX SAs enter ADOPT
+    E2-->>E1: CLCW feedback returns
+
+    Note over E1,E2: LINK RECOVERING
+    E1->>E1: Detect restart and re-arm both RX SAs
+    Note left of E1: Operational and recovery RX SAs enter ADOPT
+    E1->>E1: Set V(S) from EYE-2 CLCW Report Value
+    E2->>E2: Set V(S) from EYE-1 CLCW Report Value
+    opt A CLCW reports Lockout, WAIT, or retransmit
+        E1-->>E2: BC_UNLOCK as required (or EYE-2 to EYE-1)
+    end
+
+    E1->>E2: Authenticated candidate on recovery SA
+    Note right of E2: Recovery RX SA leaves ADOPT
+    E2->>E1: Authenticated candidate on recovery SA
+    Note left of E1: Recovery RX SA leaves ADOPT
+    Note over E1,E2: Operational RX SAs remain in ADOPT
+    Note over E1,E2: RECOVERY ELECTION<br/>Example result: EYE-1 wins
+
+    E1->>E2: One OTAR with both fresh operational keys
+    Note over E1: OTAR RECOVERY<br/>Await the matching FSR
+    E2->>E2: Authenticate OTAR and replace operational keys
+    Note right of E2: Old operational ADOPT state is discarded
+    E2-->>E1: Matching acceptance FSR
+
+    alt Matching FSR received
+        E1->>E1: Commit pending operational keys
+        Note left of E1: Old operational ADOPT state is discarded
+    else FSR lost
+        E1->>E2: Retransmit the exact stored OTAR frame
+        E2-->>E1: Repeat the correlated acceptance FSR
+        E1->>E1: Commit pending operational keys
+        Note left of E1: Old operational ADOPT state is discarded
+    end
+
+    Note over E1,E2: OTAR CONFIRMING
+    E1->>E2: Authenticated peer status under new keys
+    E2->>E1: Authenticated peer status under new keys
+    Note over E1,E2: New operational RX baselines are established
+    Note over E1,E2: READY / PEER OK
+```
+
+Some transitions can complete between the display's 250-ms link snapshots, so
+`OTAR RECOVERY` or `OTAR CONFIRMING` may appear only briefly. The final
+authenticated peer-status exchange can add a short delay before `READY / PEER
+OK` appears after key confirmation.
+
+In `ADOPT` state, the receiver is temporarily exposed to a previously
+recorded authenticated frame. This interval can be minimized by key rotation, but the
+peers must first determine which party shall initiate an OTAR. This is
+done by an automatic election, followed by OTAR by the winner.
+
+The demo uses one direct OTAR, confirmed by its correlated FSR, 
+and atomically switches the existing operational SAs without a separate conventional 
+activate/rekey/start-SA command sequence. The fixed maintenance SAs are not rotated, so they
+remain available if recovery traffic must be retransmitted.
+
+Given volatile anti-replay state across reset, this autonomous recovery
+procedure reduces the recovery replay exposure compared with conventional
+manually coordinated SDLS recovery, while avoiding per-frame nonvolatile memory
+writes.
 
 ## Tagged demonstration versions
 

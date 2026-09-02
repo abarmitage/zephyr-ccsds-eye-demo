@@ -51,6 +51,15 @@ enum demo_link_action {
 	DEMO_LINK_SET_VR,
 };
 
+enum demo_link_recovery_phase {
+	DEMO_LINK_RECOVERY_NONE,
+	DEMO_LINK_RECOVERY_WAIT_PEER,
+	DEMO_LINK_RECOVERY_CONVERGING,
+	DEMO_LINK_RECOVERY_ELECTION,
+	DEMO_LINK_RECOVERY_OTAR,
+	DEMO_LINK_RECOVERY_CONFIRMING,
+};
+
 struct demo_link_snapshot {
 	uint32_t new_frames;
 	uint32_t retransmitted_frames;
@@ -95,6 +104,7 @@ struct demo_link_snapshot {
 	uint8_t ingress_used;
 	uint8_t ingress_peak;
 	uint8_t ingress_capacity;
+	uint8_t recovery_phase;
 	uint8_t election_state;
 	uint8_t otar_arsn_lsb;
 	uint16_t otar_carrier_spi;

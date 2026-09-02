@@ -460,6 +460,9 @@ static int advance_link_sync(uint64_t now, int peer_rc,
 			return rc;
 		}
 		ccsds_uslp_peer_get_snapshot(&peer, snapshot);
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+		recovery_transport_returned = true;
+#endif
 		if (snapshot->fop_state == CCSDS_USLP_FOP_INITIALIZING_WITH_BC) {
 			link_sync_phase = LINK_SYNC_UNLOCK;
 			LOG_WRN("USLP COP-1 peer returned with dirty CLCW; UNLOCK queued at V(R)=%u",
@@ -467,7 +470,8 @@ static int advance_link_sync(uint64_t now, int peer_rc,
 		} else {
 			link_sync_phase = LINK_SYNC_READY;
 			next_status_ms = now;
-			LOG_INF("USLP COP-1 peer returned with clean CLCW; adopted V(R)=%u",
+			LOG_INF("USLP COP-1 peer returned with clean CLCW; "
+				"set V(S)=%u from peer V(R)",
 				snapshot->transmit_sequence);
 		}
 		return 0;
@@ -901,7 +905,7 @@ static int deliver_packet(void *user, const uint8_t *packet, size_t packet_len)
 	return ccsds_profile_input_dispatch_unit(&input_profile, packet, packet_len);
 }
 
-static void recover_from_divergent_clcw(uint64_t now)
+static void recover_from_restart_clcw(uint64_t now, bool dirty)
 {
 	struct ccsds_uslp_peer_snapshot snapshot;
 	int rc;
@@ -934,13 +938,14 @@ static void recover_from_divergent_clcw(uint64_t now)
 #endif
 	if (snapshot.fop_state == CCSDS_USLP_FOP_INITIALIZING_WITH_BC) {
 		link_sync_phase = LINK_SYNC_UNLOCK;
-		LOG_WRN("USLP repeated divergent CLCW; peer restart detected, UNLOCK queued at V(R)=%u",
-			snapshot.transmit_sequence);
+		LOG_WRN("USLP %s CLCW; peer restart detected, UNLOCK queued at V(R)=%u",
+			dirty ? "dirty" : "divergent", snapshot.transmit_sequence);
 	} else {
 		link_sync_phase = LINK_SYNC_READY;
 		next_status_ms = now;
-		LOG_WRN("USLP repeated divergent CLCW; peer restart detected, adopted V(R)=%u",
-			snapshot.transmit_sequence);
+		LOG_WRN("USLP %s CLCW; peer restart detected, "
+			"set V(S)=%u from peer V(R)",
+			dirty ? "dirty" : "divergent", snapshot.transmit_sequence);
 	}
 }
 
@@ -960,12 +965,22 @@ static void service_peer_ingress(uint64_t now)
 		struct ccsds_uslp_peer_snapshot snapshot;
 
 		ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
-		if (demo_clcw_divergence_observe(
-			    &clcw_divergence,
-			    rc == -ERANGE && snapshot.last_clcw_valid,
-			    snapshot.last_clcw_report, now,
-			    CLCW_DIVERGENCE_CONFIRM_MS)) {
-			recover_from_divergent_clcw(now);
+		bool dirty = snapshot.last_clcw_valid &&
+			     (snapshot.last_clcw_lockout || snapshot.last_clcw_wait ||
+			      snapshot.last_clcw_retransmit);
+		bool divergent = rc == -ERANGE && snapshot.last_clcw_valid;
+		bool known_peer_return = divergent && !peer_ready && !initial_link_acquisition;
+
+		if (dirty && !peer_ready && link_sync_phase != LINK_SYNC_UNLOCK) {
+			memset(&clcw_divergence, 0, sizeof(clcw_divergence));
+			recover_from_restart_clcw(now, true);
+		} else if (known_peer_return) {
+			memset(&clcw_divergence, 0, sizeof(clcw_divergence));
+			recover_from_restart_clcw(now, false);
+		} else if (demo_clcw_divergence_observe(&clcw_divergence, divergent,
+							snapshot.last_clcw_report, now,
+							CLCW_DIVERGENCE_CONFIRM_MS)) {
+			recover_from_restart_clcw(now, false);
 		}
 	}
 }
@@ -1914,6 +1929,12 @@ static void publish_link_snapshot(void)
 		.ingress_used = (uint8_t)atomic_get(&rx_queue_used),
 		.ingress_peak = (uint8_t)atomic_get(&rx_queue_peak),
 		.ingress_capacity = RX_QUEUE_DEPTH,
+		.recovery_phase = peer_ready ? DEMO_LINK_RECOVERY_NONE
+					     : (link_sync_phase == LINK_SYNC_FAILED
+							? DEMO_LINK_RECOVERY_WAIT_PEER
+							: (link_sync_phase != LINK_SYNC_READY
+								   ? DEMO_LINK_RECOVERY_CONVERGING
+								   : DEMO_LINK_RECOVERY_WAIT_PEER)),
 		.peer_available = peer_ready,
 		.cfdp_tx_active = cfdp_service.entity.sender.active,
 		.cfdp_rx_active = cfdp_service.entity.receiver.active,
@@ -1925,6 +1946,17 @@ static void publish_link_snapshot(void)
 		.injected_faults = injected_faults,
 		.submit_terminal_errors = submit_terminal_errors,
 	};
+#if defined(CONFIG_EYE_DEMO_LINK_SDLS)
+	if (!peer_ready) {
+		if (recovery_otar_cutover && !recovery_otar_confirmed) {
+			next.recovery_phase = DEMO_LINK_RECOVERY_CONFIRMING;
+		} else if (recovery_otar_pending) {
+			next.recovery_phase = DEMO_LINK_RECOVERY_OTAR;
+		} else if (recovery_election.active) {
+			next.recovery_phase = DEMO_LINK_RECOVERY_ELECTION;
+		}
+	}
+#endif
 	key = k_spin_lock(&link_snapshot_lock);
 	link_snapshot = next;
 	link_snapshot_valid = true;
@@ -2144,7 +2176,8 @@ static int initialize_sdls(void)
 	}
 	ccsds_sdls_fsr_set_enabled(&sdls_ctx, true);
 	memset(&sdls_feedback_policy, 0, sizeof(sdls_feedback_policy));
-	LOG_WRN("SDLS recovery profile: ARSN window=%u; fixed maintenance SPI TX=%u RX=%u; "
+	LOG_WRN("SDLS recovery profile: ARSN window=%u; fixed maintenance SPI TX=%u "
+		"RX=%u; "
 		"adoption permits valid recorded traffic while armed",
 		EYE_SDLS_ARSN_WINDOW, EYE_SDLS_MAINTENANCE_TX_SPI,
 		EYE_SDLS_MAINTENANCE_RX_SPI);
