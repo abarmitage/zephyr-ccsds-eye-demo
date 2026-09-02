@@ -107,7 +107,7 @@ Top link state:
 
 | Field | Meaning |
 | --- | --- |
-| `PEER` | Local transmit-side COP-1 state: `OK`, `WAIT PEER`, `RECOVERING`, `SYNC`, `CONTROL`, `RETRANSMIT`, `WAIT/RETX`, or `LOCKOUT`. `WAIT PEER` and `RECOVERING` are automatic recovery states, not permanent failures. |
+| `PEER` | Local transmit-side COP-1 state: `OK`, `WAIT PEER`, `RECOVERING`, `SYNC`, `CONTROL`, `RETRANSMIT`, `WAIT/RETX`, or `LOCKOUT`. |
 | `V(R)` | Report Value in the latest CLCW received from the peer. |
 | `LOCAL` | Local receive-side COP-1 state: `OPEN`, `WAIT`, or `LOCKOUT`. |
 | `VS` | Next transmit sequence number. |
@@ -124,7 +124,7 @@ COP-1 counters:
 | `WAIT` | WAIT conditions entered locally or reported by the peer. |
 | `LKOUT` | Local or peer lockout transitions. |
 | `EXH` | COP-1 retry-limit exhaustion. |
-| `REJ` | Received USLP frames not accepted for data delivery. Causes include a malformed or mismatched frame, arrival while the local receiver is in WAIT or LOCKOUT, a sequence number ahead of the expected `VR`, or refusal by the packet-ingress path. |
+| `REJ` | Received USLP frames not accepted for data delivery. Causes include a malformed or mismatched frame, arrival while the local receiver is in WAIT or LOCKOUT, a sequence number ahead of the expected `VR`, or refusal by the packet-routing path. |
 | `DUP` | Frames already accepted and received again, normally because their acknowledgement was lost. They are not delivered twice to the application. |
 
 LINK diagnostics:
