@@ -40,8 +40,9 @@ not replace the last valid image.
 
 ![ESP32-S3-EYE button locations and display layout](assets/eye-demo-guide.svg)
 
-The display places the current board on the left and remote board
-on the right. On both boards EYE-1 is shown in blue, EYE-2 in orange.
+The display shows the current board on the left and remote board on the right. 
+
+EYE-1 is shown in cyan, EYE-2 in orange.
 
 ## Configure
 
@@ -94,16 +95,15 @@ one step:
 2. Repeat from EYE-2 to EYE-1.
 3. Press **REQUEST** on EYE-1. EYE-2 captures an image and returns it; use
    **SHOW** on EYE-1 to view it.
-4. Repeat the request in the opposite direction.
+4. Repeat the requests in the opposite direction.
 
-The progress bars show transferred image bytes. Reaching 100 percent means all
-image data has arrived; CFDP checksum and completion confirmation follow as a
-separate final step.
+The progress bars show transfer progress relative to file size; CFDP checksum 
+and completion confirmation follow as a separate final step.
 
 In low light conditions, or on first transfer, the camera may still be performing
 automatic gain control during snapshot; this may show up as artifacts in the image. 
-
-Try again! More importantly, confirm that the transferred image is identical on both EYEs.
+You can try again, preferably in better lighting conditions. In any case, confirm
+that the transferred image is identical on both EYEs.
 
 ## Diagnostics
 
@@ -147,11 +147,11 @@ SDLS diagnostics:
 
 | Field | Meaning |
 | --- | --- |
-| `EST` / `ADOPT` | Operational receive sequence state. `EST` enforces the established ARSN window; `ADOPT` permits one authenticated frame to establish a new baseline during startup or explicit recovery. |
-| `TX/RX` | Newly protected transmit frames / successfully authenticated and decoded receive frames. Exact COP-1 retransmissions do not consume another transmit security operation. |
-| `FSR` | FSR OCF occurrences transmitted / valid FSR OCFs received. Retransmission of a stored frame carrying an FSR is counted again. |
+| `EST` / `ADOPT` | Operational receive SA state. `EST` enforces the ARSN window; `ADOPT` permits one authenticated frame to establish a new ARSN during startup or explicit recovery. |
+| `TX/RX` | Newly protected transmit frames / successfully authenticated and decoded receive frames. COP-1 retransmissions do not repeat transmit security operations. |
+| `FSR` | FSR OCF occurrences transmitted / valid FSR OCFs received. Retransmission of a queued frame carrying an FSR is counted again. |
 | `R/A/S` | Receive failures classified as replay-window / authentication-tag / security-association or key errors. |
-| `OTAR` | Automatic recovery and key-rotation phase: waiting for the peer, recovering the link, electing the OTAR sender, awaiting OTAR acceptance, confirming the new operational keys, or confirmed. |
+| `OTAR` | Automatic key-rotation phase: waiting for the peer, recovering the link, electing OTAR sender, awaiting OTAR acceptance, confirming new keys, or confirmed. |
 | `A/F` | Automatic recovery-election/OTAR attempts and failures. |
 
 CFDP diagnostics:
@@ -179,9 +179,9 @@ missing file data at space packet level.
 > flow-controlled sequence. COP-1 will then retransmit it. The outcome is
 > similar to a frame that channel coding detected but could not correct.
 
-CFDP validates the completed image with a file checksum. With
-COP-1 enabled at USLP frame level, CFDP gap recovery will rarely (if ever) be
-needed, because lost frames are recovered by COP-1.
+CFDP validates the completed image with a file checksum, and can request a limited
+number of missing segments. However with COP-1 enabled at USLP frame level, CFDP gap
+recovery will rarely (if ever) be needed, because lost frames are recovered by COP-1.
 
 A packet-only version, in which CFDP performs this recovery, is
 preserved by the [`demo-cfdp-packet`](#tagged-demonstration-versions) tag
