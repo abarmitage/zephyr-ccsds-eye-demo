@@ -7,14 +7,14 @@ radio link.
 
 Periodic "ping" packets are exchanged while the link and CFDP service
 are idle. This maintains visibility of link status in the absence of other traffic.
-CLCW feedback caused by transfer traffic is immediate.
+In both active and idle cases, CLCW is then returned to the peer.
 
-SDLS security (GCM) authentication & encryption is used, anti-replay sequencing is enforced
-during nominal operations. SDLS EP is partially used during link recovery.
+SDLS security (GCM) authentication & encryption is used, and anti-replay sequence is enforced
+during link operation. SDLS EP is partially used during link recovery.
 
 The goal is to demonstrate [CCSDS for Zephyr](https://github.com/abarmitage/zephyr-ccsds),
-and to explore protocol tradeoffs when satellites use symmetrical flow-controlled
-communication over USLP for bulk or high-rate data on inter-satellite links.
+and to explore protocol tradeoffs when satellites use symmetrical, flow-controlled,
+secure communication over USLP for bulk or high-rate data on inter-satellite links.
 A key question of the experiment is how the peers can autonomously recover and
 resynchronize after disruption or link failure.
 
@@ -100,6 +100,11 @@ The progress bars show transferred image bytes. Reaching 100 percent means all
 image data has arrived; CFDP checksum and completion confirmation follow as a
 separate final step.
 
+In low light conditions, or on first transfer, the camera may still be performing
+automatic gain control during snapshot; this may show up as artifacts in the image. 
+
+Try again! More importantly, confirm that the transferred image is identical on both EYEs.
+
 ## Diagnostics
 
 The **LINK** screen groups live state by protocol.
@@ -151,8 +156,7 @@ SDLS diagnostics:
 
 CFDP diagnostics:
 
-The cyan heading row shows `CFDP` at the left and the current transfer state
-(`IDLE`, `TX`, `RX`, or `DUPLEX`) at the right.
+The heading row the current transfer state (`IDLE`, `TX`, `RX`, or `DUPLEX`) at the right.
 
 | Field | Meaning |
 | --- | --- |
@@ -184,9 +188,11 @@ preserved by the [`demo-cfdp-packet`](#tagged-demonstration-versions) tag
 described below.
 
 It's interesting to compare the two configurations; clearly, COP-1 flow-controlled
-is preferable, although in the demo, it "hides" CFDP's ability to recover missing
-sections of a file. By comparison, without flow control CFDP must use an
-arbitrary platform- and link-dependent delay to avoid swamping the receiver.
+is preferable, although in the demo it "hides" CFDP's recovery of missing
+file sections. By comparison, without flow control CFDP must use arbitrary platform- 
+and link-dependent delays to hopefully avoid swamping the receiver. On an intermittent
+link, its in-memory map of missing segments may not be large enough to recover
+dispersed gaps.
 
 ## Initial Startup & Link Recovery
 
@@ -195,20 +201,20 @@ over a symmetrical USLP link. A goal is to autonomously and securely recover and
 resynchronize with minimal operator intervention after either entity resets or
 loses the link.
 
-Persisting protocol sequence state after every frame would increase storage
-wear and operational complexity. The demo therefore treats COP-1 and SDLS
-session states as volatile and explicitly handles the resulting differences
-between peers after startup or reset.
+Persisting protocol sequence state with every frame would increase storage
+wear and harm performance. The demo therefore treats COP-1 and SDLS
+session states as volatile, and explicitly handles differences between peers 
+after startup or reset.
 
 In the demo configuration, periodic peer-status packets keep COP-1 active
-while the demo is otherwise idle. If an outstanding frame receives no
-usable acknowledgement after 12 transmission attempts—because either the frame
-or its returning CLCW feedback is lost—the configured 1.5-second retransmission
+while the link is otherwise idle. No fixed-size idle frame is used.
+If an outstanding frame receives no usable acknowledgement after 12 transmission - either the frame
+or its returning CLCW feedback is lost - the configured 1.5-second retransmission
 timer eventually exhausts its retry limit. The display changes to `WAITING FOR
 PEER` while the service continues looking for returning CLCW feedback.
 
-With UDP over Wi-Fi, this is occasionally observed after the demo has been idle
-for several hours. These naturally occurring link failures are useful for
+Wi-Fi connection loss is occasionally seen after the demo has been idle
+for several hours. These naturally occurring failures are useful for
 exercising and demonstrating the resynchronization and recovery procedures
 under realistic conditions. The goal of the demo is not to eliminate link errors,
 but to explore how flow control and security can be maintained—and how the link
@@ -227,7 +233,7 @@ The states shown on the main screen during recovery are:
 | `LINK RECOVERING` | Peer feedback has returned and COP-1 is setting its transmit sequence from the peer's CLCW Report Value or completing control-frame synchronization. This is distinct from SDLS `ADOPT`. |
 | `RECOVERY ELECTION` | Both EYEs exchange authenticated random candidates over their fixed maintenance SAs. The winner becomes the sole OTAR sender; the loser waits for that OTAR. This state also includes reliable candidate delivery and acknowledgement, so it may remain visible for several seconds. |
 | `OTAR RECOVERY` | The elected winner has submitted one OTAR carrying fresh keys for both operational directions and is awaiting the matching FSR acceptance indication. |
-| `OTAR CONFIRMING` | The new operational keys have been installed; the EYE is waiting for authenticated new-key traffic that proves its peer has also cut over. |
+| `OTAR CONFIRMING` | The new operational keys have been installed; the EYE is waiting for authenticated new-key traffic that proves both peers recovered. |
 | `READY / PEER OK` | Authenticated peer status is flowing under the current operational keys and normal commands and transfers are enabled. |
 
 The following example shows EYE-2 restarting and EYE-1 winning the random OTAR
@@ -283,59 +289,58 @@ sequenceDiagram
     Note over E1,E2: READY / PEER OK
 ```
 
-Some transitions can complete between the display's 250-ms link snapshots, so
-`OTAR RECOVERY` or `OTAR CONFIRMING` may appear only briefly. The final
+Some transitions can complete between the display's 250-ms link sampling, so
+`OTAR RECOVERY` or `OTAR CONFIRMING` may appear briefly or not at all. The final
 authenticated peer-status exchange can add a short delay before `READY / PEER
 OK` appears after key confirmation.
 
 ### COP-1 Synchronization
 
 After a reset, the peers may disagree about their expected Frame Sequence
-Numbers. Attempting to continue without reconciliation can result in rejected
-frames, retransmissions, or Lockout.
+Numbers. Attempting to continue without reconciliation would likely result in
+Lockout.
 
 On initial CLCW acquisition after boot, the transmitter adopts the peer’s CLCW
-Report Value and may send `BC_UNLOCK` if the peer is in Lockout. This allows
-normal startup to reconcile automatically.
+Report Value. It may send `BC_UNLOCK` if the peer is already in Lockout. This allows
+normal COP-1 startup to reconcile automatically. The demo does not automatically send `SET_VR`.
 
 A later Lockout or retry exhaustion starts automatic recovery. The main display
 shows `WAITING FOR PEER` while no usable feedback is arriving and `LINK
-RECOVERING` while COP-1 is converging. The **LINK** screen provides manual
-resynchronization controls as a fallback, but they are not normally required.
-The demo does not automatically send `SET_VR`.
+RECOVERING` while COP-1 is synchronising. 
+
+The **LINK** screen provides manual COP-1 resynchronization controls as a fallback, b
+ut they are not normally required. 
 
 ### SDLS Anti-Replay Initialisation & Recovery
 
-Each protected frame carries an initialization vector (IV) containing a
+Each protected frame carries an initialization vector (IV) containing a 64-bit
 randomized sender value and a 32-bit Anti-Replay Sequence Number (ARSN). Under
 normal operation, the receiver accepts only the next forward movement of
-the ARSN. This prevents an old authenticated frame from simply being replayed.
+the ARSN. This prevents old authenticated frames from simply being replayed.
 
-A reboot restarts the ARSN at zero and chooses a new randomized IV
-component. The peer cannot treat that as ordinary forward progress, so each
-operational receive SA begins in `ADOPT` state. In `ADOPT`, the first
-frame that passes authentication, decoding, and application delivery establishes
-the new receive ARSN baseline.
-
-Joint startup normally closes `ADOPT` automatically through authenticated
-status traffic. If either EYE subsequently restarts, both sides automatically
-reconcile COP-1, re-arm adoption where required, and rotate the two operational
-traffic keys.
+Without persistence of the ARSN, a reboot restarts the ARSN at zero and chooses
+a new randomized IV component. The peer cannot treat that as ordinary forward
+progress, so an automated recovery state is initiated. Each operational receive SA 
+begins in `ADOPT` state. The first frame passing authentication, decoding, and application 
+delivery fixes the new receive ARSN and goes to `EST` (established) state.
 
 In `ADOPT` state, the receiver is temporarily exposed to a previously
-recorded authenticated frame. This interval can be minimized by key rotation, but the
-peers must first determine which party shall initiate an OTAR. This is
+recorded authenticated frame. This interval can be minimized by automated key rotation.
+The peers must first determine which party shall initiate an OTAR. This is
 done by an automatic election, followed by OTAR initiated by the winner.
 
-The demo uses one direct OTAR, confirmed by its correlated FSR,
-and switches the operational SAs without a conventional activate/rekey/start-SA
-command sequence. The fixed maintenance SAs are not rotated, so they
+Startup normally closes `ADOPT` automatically through authenticated
+status traffic. If either EYE subsequently restarts, both sides automatically
+reconcile COP-1, re-arm adoption where required, elect an OTAR initator,
+and rotate the two operational traffic keys.
+
+The fixed maintenance SAs are not rotated, so they
 remain available if recovery traffic must be retransmitted.
 
-Given volatile anti-replay state across reset, this autonomous recovery
-procedure reduces the recovery replay exposure compared with conventional
-manually coordinated SDLS recovery, while avoiding per-frame nonvolatile memory
-writes.
+The demo uses one direct OTAR, confirmed by its correlated FSR,
+without a full SDLS-EP activate/rekey/start-SA command sequence. 
+This autonomous quick recovery procedure reduces the replay exposure compared with 
+manual SDLS-EP recovery procedures.
 
 ## Tagged demonstration versions
 
