@@ -132,14 +132,6 @@ config EYE_DEMO_PEER_SPACECRAFT_ID
 	default 0x1001 if EYE_DEMO_ROLE_B
 	range 0 0xffff
 
-config EYE_DEMO_LOCAL_SCID_IS_SOURCE
-	bool "Local spacecraft ID uses the USLP source indication"
-	default y
-
-config EYE_DEMO_PEER_SCID_IS_SOURCE
-	bool "Remote spacecraft ID uses the USLP source indication"
-	default y
-
 config EYE_DEMO_TRANSMIT_VCID
 	int "Transmit USLP virtual channel ID"
 	default 1

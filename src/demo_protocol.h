@@ -92,8 +92,6 @@ struct demo_peer_status {
 	char callsign[DEMO_CALLSIGN_LEN];
 	uint16_t local_spacecraft_id;
 	uint16_t peer_spacecraft_id;
-	uint8_t local_source_or_destination;
-	uint8_t peer_source_or_destination;
 	uint8_t transmit_vcid;
 	uint8_t receive_vcid;
 	uint8_t transmit_map_id;
@@ -123,8 +121,6 @@ struct demo_peer_expectation {
 	char peer_callsign[DEMO_CALLSIGN_LEN];
 	uint16_t local_spacecraft_id;
 	uint16_t peer_spacecraft_id;
-	uint8_t local_source_or_destination;
-	uint8_t peer_source_or_destination;
 	uint8_t transmit_vcid;
 	uint8_t receive_vcid;
 	uint8_t transmit_map_id;

@@ -98,8 +98,7 @@ int demo_peer_status_encode(const struct demo_peer_status *status, uint8_t *buff
 	sys_put_be32(DEMO_IMAGE_OBJECT_SIZE, &buffer[40]);
 	sys_put_be16(status->local_spacecraft_id, &buffer[44]);
 	sys_put_be16(status->peer_spacecraft_id, &buffer[46]);
-	buffer[48] = status->local_source_or_destination;
-	buffer[49] = status->peer_source_or_destination;
+	/* Bytes 48-49 are reserved; frame direction is derived from content. */
 	buffer[50] = status->transmit_vcid;
 	buffer[51] = status->receive_vcid;
 	buffer[52] = status->transmit_map_id;
@@ -121,7 +120,8 @@ int demo_peer_status_decode(const uint8_t *buffer, size_t length, struct demo_pe
 	if (buffer == NULL || status == NULL || length != DEMO_PEER_STATUS_LEN ||
 	    buffer[0] != DEMO_PROTOCOL_VERSION || buffer[1] != DEMO_MSG_PEER_STATUS ||
 	    buffer[2] != 0u || buffer[3] != 0u ||
-	    sys_get_be32(&buffer[40]) != DEMO_IMAGE_OBJECT_SIZE || buffer[67] != 0u) {
+	    sys_get_be32(&buffer[40]) != DEMO_IMAGE_OBJECT_SIZE || buffer[48] != 0u ||
+	    buffer[49] != 0u || buffer[67] != 0u) {
 		return -EINVAL;
 	}
 	memset(status, 0, sizeof(*status));
@@ -138,8 +138,6 @@ int demo_peer_status_decode(const uint8_t *buffer, size_t length, struct demo_pe
 	memcpy(status->callsign, &buffer[32], DEMO_CALLSIGN_LEN);
 	status->local_spacecraft_id = sys_get_be16(&buffer[44]);
 	status->peer_spacecraft_id = sys_get_be16(&buffer[46]);
-	status->local_source_or_destination = buffer[48];
-	status->peer_source_or_destination = buffer[49];
 	status->transmit_vcid = buffer[50];
 	status->receive_vcid = buffer[51];
 	status->transmit_map_id = buffer[52];
@@ -177,8 +175,6 @@ enum demo_peer_validation demo_peer_status_validate(const struct demo_peer_statu
 	    memcmp(status->callsign, expected->peer_callsign, DEMO_CALLSIGN_LEN) != 0 ||
 	    status->local_spacecraft_id != expected->peer_spacecraft_id ||
 	    status->peer_spacecraft_id != expected->local_spacecraft_id ||
-	    status->local_source_or_destination != expected->peer_source_or_destination ||
-	    status->peer_source_or_destination != expected->local_source_or_destination ||
 	    status->transmit_vcid != expected->receive_vcid ||
 	    status->receive_vcid != expected->transmit_vcid ||
 	    status->transmit_map_id != expected->receive_map_id ||

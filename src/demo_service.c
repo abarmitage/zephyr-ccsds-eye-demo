@@ -84,12 +84,6 @@ LOG_MODULE_REGISTER(eye_service, CONFIG_LOG_DEFAULT_LEVEL);
 #define DEMO_CONTROL_PAYLOAD_MAX DEMO_PEER_STATUS_LEN
 #endif
 #define PEER_PACKET_SLOTS            4u
-#define LOCAL_SCID_INDICATION                                                                      \
-	(IS_ENABLED(CONFIG_EYE_DEMO_LOCAL_SCID_IS_SOURCE) ? CCSDS_USLP_SCID_IS_SOURCE              \
-							  : CCSDS_USLP_SCID_IS_DESTINATION)
-#define PEER_SCID_INDICATION                                                                       \
-	(IS_ENABLED(CONFIG_EYE_DEMO_PEER_SCID_IS_SOURCE) ? CCSDS_USLP_SCID_IS_SOURCE               \
-							 : CCSDS_USLP_SCID_IS_DESTINATION)
 #define CFDP_MAX_FILE_DATA_PDUS                                                                    \
 	DIV_ROUND_UP(DEMO_IMAGE_OBJECT_SIZE, CONFIG_CCSDS_CFDP_MAX_SEGMENT_SIZE)
 #define CFDP_MAX_SYNCHRONOUS_PACKETS (CFDP_MAX_FILE_DATA_PDUS + 2u)
@@ -763,7 +757,7 @@ static int recovery_otar_router_handler(const struct ccsds_space_packet *packet,
 	int rc;
 
 	ARG_UNUSED(user_data);
-	if (packet == NULL || packet->type != CCSDS_PACKET_TYPE_TM ||
+	if (packet == NULL || packet->type != CCSDS_PACKET_TYPE_TC ||
 	    packet->payload == NULL || packet->payload_len == 0u ||
 	    packet->payload_len > CCSDS_SDLS_EP_OTAR_PDU_MAX ||
 	    !sdls_ctx.authenticated_rx_dispatching ||
@@ -1080,8 +1074,6 @@ static void send_peer_status(void)
 		.peer_status_apid = CONFIG_EYE_DEMO_PEER_STATUS_APID,
 		.local_spacecraft_id = CONFIG_EYE_DEMO_LOCAL_SPACECRAFT_ID,
 		.peer_spacecraft_id = CONFIG_EYE_DEMO_PEER_SPACECRAFT_ID,
-		.local_source_or_destination = LOCAL_SCID_INDICATION,
-		.peer_source_or_destination = PEER_SCID_INDICATION,
 		.transmit_vcid = CONFIG_EYE_DEMO_TRANSMIT_VCID,
 		.receive_vcid = CONFIG_EYE_DEMO_RECEIVE_VCID,
 		.transmit_map_id = CONFIG_EYE_DEMO_TRANSMIT_MAP_ID,
@@ -1443,7 +1435,7 @@ static void service_sdls_recovery(uint64_t now)
 					      .key_slot]
 				.tx_arsn;
 		rc = send_space_packet(CONFIG_EYE_DEMO_OTAR_APID,
-				       CCSDS_PACKET_TYPE_TM, recovery_otar_pdu,
+				       CCSDS_PACKET_TYPE_TC, recovery_otar_pdu,
 				       recovery_otar_pdu_len);
 		if (rc != 0) {
 			ccsds_sdls_ep_cancel_pending_keys(&recovery_pending_keys);
@@ -1495,8 +1487,6 @@ static void process_peer_status(const struct router_message *message, uint64_t n
 		.peer_status_apid = CONFIG_EYE_DEMO_PEER_STATUS_APID,
 		.local_spacecraft_id = CONFIG_EYE_DEMO_LOCAL_SPACECRAFT_ID,
 		.peer_spacecraft_id = CONFIG_EYE_DEMO_PEER_SPACECRAFT_ID,
-		.local_source_or_destination = LOCAL_SCID_INDICATION,
-		.peer_source_or_destination = PEER_SCID_INDICATION,
 		.transmit_vcid = CONFIG_EYE_DEMO_TRANSMIT_VCID,
 		.receive_vcid = CONFIG_EYE_DEMO_RECEIVE_VCID,
 		.transmit_map_id = CONFIG_EYE_DEMO_TRANSMIT_MAP_ID,
@@ -1971,12 +1961,12 @@ static void trace_link_snapshot(const char *reason)
 	ccsds_uslp_peer_get_snapshot(&peer, &snapshot);
 	ccsds_udp_get_stats(&udp, &udp_stats);
 	peak_outstanding = MAX(peak_outstanding, snapshot.outstanding_frames);
-	LOG_INF("USLP LINK reason=%s role=%s tx=%04x/%u/%u/%u rx=%04x/%u/%u/%u "
+	LOG_INF("USLP LINK reason=%s role=%s tx=%04x/%u/%u rx=%04x/%u/%u "
 		"fop=%u farm=%u new=%u retx=%u packet=%u feedback=%u",
 		reason, CONFIG_EYE_DEMO_CALLSIGN, CONFIG_EYE_DEMO_LOCAL_SPACECRAFT_ID,
-		LOCAL_SCID_INDICATION, CONFIG_EYE_DEMO_TRANSMIT_VCID,
+		CONFIG_EYE_DEMO_TRANSMIT_VCID,
 		CONFIG_EYE_DEMO_TRANSMIT_MAP_ID, CONFIG_EYE_DEMO_PEER_SPACECRAFT_ID,
-		PEER_SCID_INDICATION, CONFIG_EYE_DEMO_RECEIVE_VCID, CONFIG_EYE_DEMO_RECEIVE_MAP_ID,
+		CONFIG_EYE_DEMO_RECEIVE_VCID, CONFIG_EYE_DEMO_RECEIVE_MAP_ID,
 		snapshot.fop_state, snapshot.farm_state, snapshot.stats.new_frames_emitted,
 		snapshot.stats.retransmitted_frames, snapshot.stats.packet_frames_emitted,
 		snapshot.stats.feedback_frames_emitted);
@@ -2201,14 +2191,12 @@ static int initialize_protocol(void)
 		.transmit_channel =
 			{
 				.spacecraft_id = CONFIG_EYE_DEMO_LOCAL_SPACECRAFT_ID,
-				.source_or_destination = LOCAL_SCID_INDICATION,
 				.virtual_channel_id = CONFIG_EYE_DEMO_TRANSMIT_VCID,
 				.map_id = CONFIG_EYE_DEMO_TRANSMIT_MAP_ID,
 			},
 		.receive_channel =
 			{
 				.spacecraft_id = CONFIG_EYE_DEMO_PEER_SPACECRAFT_ID,
-				.source_or_destination = PEER_SCID_INDICATION,
 				.virtual_channel_id = CONFIG_EYE_DEMO_RECEIVE_VCID,
 				.map_id = CONFIG_EYE_DEMO_RECEIVE_MAP_ID,
 			},
